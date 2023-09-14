@@ -1,4 +1,5 @@
 scripts/wandb
+src/wandb
 scripts/Outputs
 src/__pycache__
 logs

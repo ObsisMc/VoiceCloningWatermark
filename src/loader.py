@@ -17,11 +17,13 @@ import numpy as np
 import glob as glob
 from PIL import Image
 from torch.utils.data import DataLoader
+from dotenv import load_dotenv
 
 from pystct import sdct_torch, isdct_torch
 from torch_stft import STFT
 import matplotlib.pyplot as plt
 
+load_dotenv()
 MY_FOLDER = os.environ.get('USER_PATH')
 DATA_FOLDER = os.environ.get('DATA_PATH')
 AUDIO_FOLDER = f"{DATA_FOLDER}/FSDnoisy/FSDnoisy18k.audio_"
@@ -200,18 +202,14 @@ class StegoDataset(torch.utils.data.Dataset):
         elif (folder == "test"):
             for key in mappings.keys():
                 for img in glob.glob(f'{self._image_data_path}/{key}/*.{self.image_extension}'):
-    
-                    if test_i > self._TOTAL:
-                        if test_j >= 10: 
-                            test_j = 0
-                            break
+                    if test_j >= 13:
+                        break
+                    elif test_j >= 10:
                         self._indices.append((key, re.search(r'(?<=_)\d+', img).group()))
                         self._index += 1
-                        test_j += 1
-    
-                    test_i += 1
-
+                    test_j += 1
                     if self._index == self._MAX_LIMIT: break
+                test_j = 0
                 if self._index == self._MAX_LIMIT: break
 
         #AUDIO PATH RETRIEVING (here the paths for test and train are different)
