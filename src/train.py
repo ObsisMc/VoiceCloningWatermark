@@ -125,7 +125,8 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
                 if ft_container == 'mag':
                     original_wav = stft.inverse(covers.squeeze(1), phase.squeeze(1))
                     container_wav = stft.inverse(containers.squeeze(1), phase.squeeze(1))
-                    container_2x = stft.transform(container_wav)[0].unsqueeze(1)
+                    container_2x = stft.transform(container_wav)[0].unsqueeze(1)  # TODO: obsismc: why have this?
+                    # TODO: what is loss_spectrum
                     loss, loss_cover, loss_secret, loss_spectrum = StegoLoss(secrets, covers, containers, container_2x, revealed, beta)
                 elif ft_container == 'phase':
                     original_wav = stft.inverse(covers.squeeze(1), phase.squeeze(1))
