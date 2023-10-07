@@ -38,7 +38,7 @@ def SNR(cover, container, phase, container_phase, transform, transform_construct
             cover_wav = transform_constructor.inverse(cover.squeeze(1), phase.squeeze(1)).cpu().data.numpy()[..., :]
             noise_wav = transform_constructor.inverse((container - cover).squeeze(1), (container_phase - phase).squeeze(1)).cpu().data.numpy()[..., :]
     else: raise Exception('Transform not defined')
-    
+
     signal = np.sum(np.abs(np.fft.fft(cover_wav)) ** 2) / len(np.fft.fft(cover_wav))
     noise = np.sum(np.abs(np.fft.fft(noise_wav))**2) / len(np.fft.fft(noise_wav))
     if noise <= 0.00001 or signal <= 0.00001: return 0
@@ -93,7 +93,7 @@ def _ssim(img1, img2, window, window_size, channel, size_average = True):
     C2 = 0.03**2
 
     ssim_map = ((2*mu1_mu2 + C1)*(2*sigma12 + C2))/((mu1_sq + mu2_sq + C1)*(sigma1_sq + sigma2_sq + C2))
-    
+
     if size_average:
         return ssim_map.mean()
     else:
@@ -118,11 +118,11 @@ class SSIM(torch.nn.Module):
             window = self.window
         else:
             window = create_window(self.window_size, channel)
-            
+
             if img1.is_cuda:
                 window = window.cuda(img1.get_device())
             window = window.type_as(img1)
-            
+
             self.window = window
             self.channel = channel
 
@@ -136,12 +136,50 @@ def ssim(img1, img2, window_size = 11, size_average = True):
     """
     (_, channel, _, _) = img1.size()
     window = create_window(window_size, channel)
-    
+
     if img1.is_cuda:
         window = window.cuda(img1.get_device())
     window = window.type_as(img1)
-    
+
     return _ssim(img1, img2, window, window_size, channel, size_average)
+
+
+def calc_ber(watermark_revealed, watermark_origin, threshold=0.5):
+    watermark_decoded_binary = watermark_revealed >= threshold
+    watermark_binary = watermark_origin >= threshold
+    ber_tensor = 1 - (watermark_decoded_binary == watermark_binary).to(torch.float32).mean()
+    return ber_tensor
+
+
+def to_equal_length(original, signal_watermarked):
+    if original.shape != signal_watermarked.shape:
+        print("Warning: length not equal:", len(original), len(signal_watermarked))
+        min_length = min(len(original), len(signal_watermarked))
+        original = original[0:min_length]
+        signal_watermarked = signal_watermarked[0:min_length]
+    assert original.shape == signal_watermarked.shape
+    return original, signal_watermarked
+
+
+def signal_noise_ratio(original, signal_watermarked):
+    original, signal_watermarked = to_equal_length(original, signal_watermarked)
+    noise_strength = np.sum((original - signal_watermarked) ** 2)
+    if noise_strength == 0:  #
+        return np.inf
+    signal_strength = np.sum(original ** 2)
+    ratio = signal_strength / noise_strength
+    ratio = max(1e-10, ratio)
+    return 10 * np.log10(ratio)
+
+
+def batch_signal_noise_ratio(original, signal_watermarked):
+    signal = original.detach().cpu().numpy()
+    signal_watermarked = signal_watermarked.detach().cpu().numpy()
+    tmp_list = []
+    for s, swm in zip(signal, signal_watermarked):
+        out = signal_noise_ratio(s, swm)
+        tmp_list.append(out)
+    return np.mean(tmp_list)
 
 def StegoLoss(secret, cover, container, container_2x, revealed, beta, cover2=None, container2=None, container_2x2=None, thet=0):
     """
@@ -159,7 +197,8 @@ def StegoLoss(secret, cover, container, container_2x, revealed, beta, cover2=Non
     if cover2 is not None:
         # Add MSEs for magnitude and phase, weighted by theta
         loss_cover = (1-thet) * F.mse_loss(cover2, container2) + thet * loss_cover
-    loss_secret = nn.L1Loss()
+    # loss_secret = nn.L1Loss()
+    loss_secret = nn.MSELoss()
     loss_spectrum = F.mse_loss(container, container_2x)
     if container_2x2 is not None:
         # Also add to the loss spectrum in the mag+phase case

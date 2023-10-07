@@ -11,15 +11,14 @@ umodel.py
 * Main net: StegoUNet
 '''
 
-
 import torch
 import numpy as np
 import torch.nn as nn
 from torch import utils
 import torch.nn.functional as F
 from pystct import sdct_torch, isdct_torch
-
-
+from loader import AudioProcessor
+from torch_stft import STFT
 
 
 def rgb_to_ycbcr(img):
@@ -28,11 +27,12 @@ def rgb_to_ycbcr(img):
 
     output = torch.zeros(img.shape).to(img.device)
 
-    output[:,0,:,:] =  0.2990 * img[:,0,:,:] + 0.5870 * img[:,1,:,:] + 0.1114 * img[:,2,:,:]
-    output[:,1,:,:] = -0.1687 * img[:,0,:,:] - 0.3313 * img[:,1,:,:] + 0.5000 * img[:,2,:,:] + 128
-    output[:,2,:,:] =  0.5000 * img[:,0,:,:] - 0.4187 * img[:,1,:,:] - 0.0813 * img[:,2,:,:] + 128
+    output[:, 0, :, :] = 0.2990 * img[:, 0, :, :] + 0.5870 * img[:, 1, :, :] + 0.1114 * img[:, 2, :, :]
+    output[:, 1, :, :] = -0.1687 * img[:, 0, :, :] - 0.3313 * img[:, 1, :, :] + 0.5000 * img[:, 2, :, :] + 128
+    output[:, 2, :, :] = 0.5000 * img[:, 0, :, :] - 0.4187 * img[:, 1, :, :] - 0.0813 * img[:, 2, :, :] + 128
 
     return output
+
 
 def ycbcr_to_rgb(img):
     # Taken from https://www.w3.org/Graphics/JPEG/jfif3.pdf
@@ -40,11 +40,12 @@ def ycbcr_to_rgb(img):
 
     output = torch.zeros(img.shape).to(img.device)
 
-    output[:,0,:,:] =  img[:,0,:,:] + 1.40200 * (img[:,2,:,:]-128)
-    output[:,1,:,:] =  img[:,0,:,:] - 0.34414 * (img[:,1,:,:]-128) - 0.71414*(img[:,2,:,:]-128)
-    output[:,2,:,:] =  img[:,0,:,:] + 1.77200 * (img[:,1,:,:]-128)
+    output[:, 0, :, :] = img[:, 0, :, :] + 1.40200 * (img[:, 2, :, :] - 128)
+    output[:, 1, :, :] = img[:, 0, :, :] - 0.34414 * (img[:, 1, :, :] - 128) - 0.71414 * (img[:, 2, :, :] - 128)
+    output[:, 2, :, :] = img[:, 0, :, :] + 1.77200 * (img[:, 1, :, :] - 128)
 
     return output
+
 
 def pixel_unshuffle(img, downscale_factor):
     '''
@@ -55,12 +56,25 @@ def pixel_unshuffle(img, downscale_factor):
     c = img.shape[1]
 
     kernel = torch.zeros(size=[downscale_factor * downscale_factor * c,
-                         1, downscale_factor, downscale_factor],
+                               1, downscale_factor, downscale_factor],
                          device=img.device, dtype=img.dtype)
     for y in range(downscale_factor):
         for x in range(downscale_factor):
-            kernel[x + y * downscale_factor::downscale_factor*downscale_factor, 0, y, x] = 1
+            kernel[x + y * downscale_factor::downscale_factor * downscale_factor, 0, y, x] = 1
     return F.conv2d(img, kernel, stride=downscale_factor, groups=c)
+
+
+def stft(self, data):
+    window = torch.hann_window(self.n_fft).to(data.device)
+    tmp = torch.stft(data, n_fft=self.n_fft, hop_length=self.hop_length, window=window, return_complex=False)
+    # [1, 501, 41, 2]
+    return tmp
+
+
+def istft(data, n_fft, hop_length):
+    window = torch.hann_window(n_fft).to(data.device)
+    return torch.istft(data, n_fft=n_fft, hop_length=hop_length, window=window,
+                       return_complex=False)
 
 
 class PixelUnshuffle(nn.Module):
@@ -75,7 +89,7 @@ class PixelUnshuffle(nn.Module):
 class DoubleConv(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
-        
+
         self.conv1 = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
             # nn.BatchNorm2d(out_channels),
@@ -93,7 +107,6 @@ class DoubleConv(nn.Module):
         return x
 
 
-
 class Down(nn.Module):
 
     def __init__(self, in_channels, out_channels, downsample_factor=8):
@@ -107,6 +120,7 @@ class Down(nn.Module):
         x = self.down(x)
         return x
 
+
 class Up(nn.Module):
 
     def __init__(self, in_channels, out_channels, opp_channels=-1):
@@ -114,78 +128,93 @@ class Up(nn.Module):
         #                   If -1, the same number as the current image is assumed
         super().__init__()
         self.up = nn.Sequential(
-            nn.ConvTranspose2d(in_channels , out_channels, kernel_size=3, stride=4, output_padding=0),
+            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=3, stride=4, output_padding=0),
             nn.LeakyReLU(0.8, inplace=True),
-            nn.ConvTranspose2d(out_channels , out_channels, kernel_size=3, stride=2, output_padding=1),
+            nn.ConvTranspose2d(out_channels, out_channels, kernel_size=3, stride=2, output_padding=1),
             nn.LeakyReLU(0.8, inplace=True),
         )
         if opp_channels == -1:
             opp_channels = out_channels
-        self.conv = DoubleConv(opp_channels+out_channels, out_channels)
+        self.conv = DoubleConv(opp_channels + out_channels, out_channels)
 
-    def forward(self, mix, im_opposite, au_opposite = None):
+    def forward(self, mix, im_opposite, au_opposite=None):
         mix = self.up(mix)
         x = torch.cat((mix, im_opposite), dim=1)
         return self.conv(x)
 
 
-
-
-
 class PrepHidingNet(nn.Module):
-    def __init__(self, transform='cosine', stft_small=True, embed='stretch'):
+    def __init__(self, transform='cosine', stft_small=True, embed='stretch', secrete_len=32):
         super(PrepHidingNet, self).__init__()
         self._transform = transform
         self._stft_small = stft_small
         self.embed = embed
-    
-        self.pixel_shuffle = nn.PixelShuffle(2)
+        self._secrete_len = secrete_len
+        self._AUDIO_PROCESSOR = AudioProcessor(transform=self._transform, stft_small=self._stft_small)
 
-        if self.embed == 'multichannel':
-            # In multichannel we get the 3 color channels and output the 8 replicas
-            self.im_encoder_layers = nn.ModuleList([
-                Down(3, 64),
-                Down(64, 64 * 2)
-            ])
-            if self._stft_small:
-                self.im_decoder_layers = nn.ModuleList([
-                    Up(64 * 2, 64),
-                    Up(64, 8, opp_channels=3)
-                ])
-            else:
-                self.im_decoder_layers = nn.ModuleList([
-                    Up(64 * 2, 64),
-                    Up(64, 32, opp_channels=3)
-                ])
-        else:
-            self.im_encoder_layers = nn.ModuleList([
-                Down(1, 64),
-                Down(64, 64 * 2)
-            ])
-            self.im_decoder_layers = nn.ModuleList([
-                Up(64 * 2, 64),
-                Up(64, 1)
-            ])
-    
-    
-    def forward(self, im):
+        # self.pixel_shuffle = nn.PixelShuffle(2)
 
-        if self.embed != 'multichannel':
-            im = self.pixel_shuffle(im)
+        # if self.embed == 'multichannel':
+        #     # In multichannel we get the 3 color channels and output the 8 replicas
+        #     self.im_encoder_layers = nn.ModuleList([
+        #         Down(3, 64),
+        #         Down(64, 64 * 2)
+        #     ])
+        #     if self._stft_small:
+        #         self.im_decoder_layers = nn.ModuleList([
+        #             Up(64 * 2, 64),
+        #             Up(64, 8, opp_channels=3)
+        #         ])
+        #     else:
+        #         self.im_decoder_layers = nn.ModuleList([
+        #             Up(64 * 2, 64),
+        #             Up(64, 32, opp_channels=3)
+        #         ])
+        # else:
+        #     self.im_encoder_layers = nn.ModuleList([
+        #         Down(1, 64),
+        #         Down(64, 64 * 2)
+        #     ])
+        #     self.im_decoder_layers = nn.ModuleList([
+        #         Up(64 * 2, 64),
+        #         Up(64, 1)
+        #     ])
 
-        if self.embed == 'stretch':
-        # Stretch the image to make it the same shape as the container (different for STDCT and STFT)
-            if self._transform == 'cosine':
-                im = nn.Upsample(scale_factor=(2, 1), mode='bilinear',align_corners=True)(im)
-            elif self._transform == 'fourier':
-                if self._stft_small:
-                    im = nn.Upsample(scale_factor=(2, 1), mode='bilinear',align_corners=True)(im)
-                else:
-                    im = nn.Upsample(scale_factor=(4, 2), mode='bilinear',align_corners=True)(im)
-            else: raise Exception(f'Transform not implemented')
+        self.fc = nn.Linear(self._secrete_len, self._AUDIO_PROCESSOR._limit)
+        self.im_encoder_layers = nn.ModuleList([
+            Down(1, 64),
+            Down(64, 64 * 2)
+        ])
+        self.im_decoder_layers = nn.ModuleList([
+            Up(64 * 2, 64),
+            Up(64, 1)
+        ])
+
+    def forward(self, seq):
+
+        # if self.embed != 'multichannel':
+        #     raise NotImplementedError
+        #     im = self.pixel_shuffle(im)
+
+        # if self.embed == 'stretch':
+        # # Stretch the image to make it the same shape as the container (different for STDCT and STFT)
+        #     if self._transform == 'cosine':
+        #         im = nn.Upsample(scale_factor=(2, 1), mode='bilinear',align_corners=True)(im)
+        #     elif self._transform == 'fourier':
+        #         if self._stft_small:
+        #             im = nn.Upsample(scale_factor=(2, 1), mode='bilinear',align_corners=True)(im)
+        #         else:
+        #             im = nn.Upsample(scale_factor=(4, 2), mode='bilinear',align_corners=True)(im)
+        #     else: raise Exception(f'Transform not implemented')
+
+        # TODO obsismc: the batch size must be 1
+        im = self.fc(seq).squeeze(1)
+        im, phase = self._AUDIO_PROCESSOR.forward(im, False)
+        im = im.unsqueeze(0).to(seq.device)
+        phase = phase.unsqueeze(0).to(seq.device)
 
         im_enc = [im]
-        
+
         # Encoder part of the UNet
         for enc_layer_idx, enc_layer in enumerate(self.im_encoder_layers):
             im_enc.append(enc_layer(im_enc[-1]))
@@ -196,12 +225,12 @@ class PrepHidingNet(nn.Module):
         for dec_layer_idx, dec_layer in enumerate(self.im_decoder_layers):
             mix_dec.append(dec_layer(mix_dec[-1], im_enc[-1 - dec_layer_idx], None))
 
-        return mix_dec[-1]
-
+        return mix_dec[-1], phase
 
 
 class RevealNet(nn.Module):
-    def __init__(self, mp_decoder=None, stft_small=True, embed='stretch', luma=False):
+    def __init__(self, mp_decoder=None, stft_small=True, embed='stretch', luma=False, secrete_len=32,
+                 transform='fourier'):
         super(RevealNet, self).__init__()
 
         self.mp_decoder = mp_decoder
@@ -258,56 +287,71 @@ class RevealNet(nn.Module):
                 Up(64, 1)
             ])
 
+        self.audioProcessor = AudioProcessor(transform=transform, stft_small=self._stft_small)
+        self.fc_in = self.audioProcessor._limit
+        self.n_fft = self.audioProcessor.get_frame_length()
+        self.hop_length = self.audioProcessor.get_frame_step()
+        self.fc = nn.Linear(self.fc_in, secrete_len)
+        # TODO obsismc: this SFTF seems different from torch.stft
+        self.stft = STFT(
+            filter_length = self.n_fft,
+            hop_length = self.hop_length,
+            win_length = self.n_fft,
+            window='hann'
+        )
+        self.stft.num_samples = 67522
+
         if self.embed == 'blocks2':
             if self._stft_small:
                 self.decblocks = nn.Parameter(torch.rand(2))
             else:
                 self.decblocks = nn.Parameter(torch.rand(8))
         elif self.embed == 'blocks':
-            self.decblocks = 1/2 * torch.ones(2) if self._stft_small else 1/8 * torch.ones(8)
-
+            self.decblocks = 1 / 2 * torch.ones(2) if self._stft_small else 1 / 8 * torch.ones(8)
 
     def forward(self, ct, ct_phase=None):
 
         # ct_phase is not None if and only if mp_decoder == unet
         # For other decoder types, ct is the only container
-        assert not (self.mp_decoder == 'unet'  and ct_phase is None)
-        assert not (self.mp_decoder != 'unet'  and ct_phase is not None)
-
+        # assert not (self.mp_decoder == 'unet' and ct_phase is None)
+        # assert not (self.mp_decoder != 'unet' and ct_phase is not None)
 
         # Stretch the container to make it the same size as the image
-        if self.embed == 'stretch':
-            ct = F.interpolate(ct, size=(256 * 2, 256 * 2))
-            if self.mp_decoder == 'unet':
-                ct_phase = F.interpolate(ct_phase, size=(256 * 2, 256 * 2))
-        
-        if self.mp_decoder == 'unet': # mp_decoder=None unless using magphase
-            # Concatenate mag and phase containers to input to RevealNet
-            im_enc = [torch.cat((ct, ct_phase), 1)]
-        elif self.embed == 'blocks3':
-            if self._stft_small:
-                # Undo split and concatenate in another dimension
-                if self._stft_small:
-                    (rep1, rep2) = torch.split(ct, 512, 2)
-                else:
-                    (rep1, rep2) = torch.split(ct, 1024, 2)
-                im_enc = [torch.cat((rep1, rep2), 1)]
-            else:
-                # Split the 8 replicas and concatenate. 1x1x2048x1024 -> 1x8x512x512
-                split1 = torch.split(ct, 512, 3)
-                cat1 = torch.cat(split1, 1)
-                split2 = torch.split(cat1, 512, 2)
-                im_enc = [torch.cat(split2, 1)]
-        elif self.embed == 'multichannel':
-            # Small STFT: split the 8 replicas and concatenate. 1x1x1024x512 -> 1x8x256x256
-            # Large STFT: split the 32 replicas and concatenate. 1x1x2048x1024 -> 1x32x256x256
-            split1 = torch.split(ct, 256, 3)
-            cat1 = torch.cat(split1, 1)
-            split2 = torch.split(cat1, 256, 2)
-            im_enc = [torch.cat(split2, 1)]
-        else:
-            # Else there is only one container (can be anything)
-            im_enc = [ct]
+        # if self.embed == 'stretch':
+        #     ct = F.interpolate(ct, size=(256 * 2, 256 * 2))
+        #     if self.mp_decoder == 'unet':
+        #         ct_phase = F.interpolate(ct_phase, size=(256 * 2, 256 * 2))
+
+        # if self.mp_decoder == 'unet':  # mp_decoder=None unless using magphase
+        #     # Concatenate mag and phase containers to input to RevealNet
+        #     im_enc = [torch.cat((ct, ct_phase), 1)]  # TODO obsismc: ct_phase is often None?
+        # elif self.embed == 'blocks3':
+        #     raise NotImplementedError
+        #     if self._stft_small:
+        #         # Undo split and concatenate in another dimension
+        #         if self._stft_small:
+        #             (rep1, rep2) = torch.split(ct, 512, 2)
+        #         else:
+        #             (rep1, rep2) = torch.split(ct, 1024, 2)
+        #         im_enc = [torch.cat((rep1, rep2), 1)]
+        #     else:
+        #         # Split the 8 replicas and concatenate. 1x1x2048x1024 -> 1x8x512x512
+        #         split1 = torch.split(ct, 512, 3)
+        #         cat1 = torch.cat(split1, 1)
+        #         split2 = torch.split(cat1, 512, 2)
+        #         im_enc = [torch.cat(split2, 1)]
+        # elif self.embed == 'multichannel':
+        #     raise NotImplementedError
+        #     # Small STFT: split the 8 replicas and concatenate. 1x1x1024x512 -> 1x8x256x256
+        #     # Large STFT: split the 32 replicas and concatenate. 1x1x2048x1024 -> 1x32x256x256
+        #     split1 = torch.split(ct, 256, 3)
+        #     cat1 = torch.cat(split1, 1)
+        #     split2 = torch.split(cat1, 256, 2)
+        #     im_enc = [torch.cat(split2, 1)]
+        # else:
+        #     # Else there is only one container (can be anything)
+        #     im_enc = [ct]
+        im_enc = [ct]
 
         # Encoder part of the UNet
         for enc_layer_idx, enc_layer in enumerate(self.im_encoder_layers):
@@ -319,27 +363,38 @@ class RevealNet(nn.Module):
         for dec_layer_idx, dec_layer in enumerate(self.im_decoder_layers):
             im_dec.append(
                 dec_layer(im_dec[-1],
-                im_enc[-1 - dec_layer_idx])
+                          im_enc[-1 - dec_layer_idx])
             )
 
         if self.embed == 'multichannel':
+            raise NotImplementedError
             # The revealed image is the output of the U-Net
             revealed = im_dec[-1]
         elif self.luma:
+            raise NotImplementedError
             # Convert RGB to YUV, average lumas and back to RGB
             unshuffled = self.pixel_unshuffle(im_dec[-1])
             rgbs = torch.narrow(unshuffled, 1, 0, 3)
-            luma = unshuffled[:,3,:,:]
+            luma = unshuffled[:, 3, :, :]
 
             yuvs = rgb_to_ycbcr(rgbs)
-            yuvs[:,0,:,:] = 0.5*yuvs[:,0,:,:] + 0.5*luma
+            yuvs[:, 0, :, :] = 0.5 * yuvs[:, 0, :, :] + 0.5 * luma
 
             revealed = ycbcr_to_rgb(yuvs)
         else:
             # Pixel Unshuffle and delete 4th component
-            revealed = torch.narrow(self.pixel_unshuffle(im_dec[-1]), 1, 0, 3)
+            # revealed = torch.narrow(self.pixel_unshuffle(im_dec[-1]), 1, 0, 3)
+            revealed = im_dec[-1]
+
+        # obsismc: sequence
+        # revealed = torch.stack([revealed, ct_phase], dim=-1)
+        revealed = revealed.squeeze(1)  # mag (B,H,W)
+        ct_phase = ct_phase.squeeze(1)  # phase (B,H,W)
+        revealed = self.stft.inverse(revealed, ct_phase)
+        revealed = self.fc(revealed)  # (B, secret_len)
 
         if self.embed == 'blocks' or self.embed == 'blocks2':
+            raise NotImplementedError
             # Undo concatenation and recover a single image
             if self._stft_small:
                 replicas = torch.split(revealed, 256, 2)
@@ -348,15 +403,15 @@ class RevealNet(nn.Module):
                 replicas = tuple([torch.split(replicas[i], 256, 2) for i in range(2)])
                 replicas = replicas[0] + replicas[1]
             # Scale and add
-            revealed = torch.sum(torch.stack([replicas[i]*self.decblocks[i] for i in range(len(self.decblocks))]), dim=0)
+            revealed = torch.sum(torch.stack([replicas[i] * self.decblocks[i] for i in range(len(self.decblocks))]),
+                                 dim=0)
 
         return revealed
 
 
-
-
 class StegoUNet(nn.Module):
-    def __init__(self, transform='cosine', stft_small=True, ft_container='mag', mp_encoder='single', mp_decoder='double', mp_join='mean', permutation=False, embed='stretch', luma='luma'):
+    def __init__(self, transform='cosine', stft_small=True, ft_container='mag', mp_encoder='single',
+                 mp_decoder='double', mp_join='mean', permutation=False, embed='stretch', luma='luma'):
 
         super().__init__()
 
@@ -374,9 +429,9 @@ class StegoUNet(nn.Module):
             raise Exception('Mag+phase does not work with embeddings other than stretch')
         if self.luma and self.embed == 'multichannel':
             raise Exception('Luma is not compatible with multichannel')
-        
+
         if transform != 'fourier' or ft_container != 'magphase':
-            self.mp_decoder = None # For compatiblity with RevealNet
+            self.mp_decoder = None  # For compatiblity with RevealNet
 
         # Sub-networks
         self.PHN = PrepHidingNet(self.transform, self.stft_small, self.embed)
@@ -388,9 +443,9 @@ class StegoUNet(nn.Module):
             if mp_decoder == 'double':
                 self.RN_phase = RevealNet(self.mp_decoder, self.stft_small, self.embed)
                 if mp_join == '2D':
-                    self.mag_phase_join = nn.Conv2d(6,3,1)
+                    self.mag_phase_join = nn.Conv2d(6, 3, 1)
                 elif mp_join == '3D':
-                    self.mag_phase_join = nn.Conv3d(2,1,1)
+                    self.mag_phase_join = nn.Conv3d(2, 1, 1)
 
         if self.embed == 'blocks2' or self.embed == 'blocks3':
             if self.stft_small:
@@ -401,27 +456,31 @@ class StegoUNet(nn.Module):
     def forward(self, secret, cover, cover_phase=None):
         # cover_phase is not None if and only if using mag+phase
         # If using the phase only, 'cover' is actually the phase!
+        # obsismc: image secret (B,C,256,256), cover (B,1024,512)
+        # obsismc: sequence secret (B,32), cover (B,1,1024,512)
         assert not ((self.transform == 'fourier' and self.ft_container == 'magphase') and cover_phase is None)
         assert not ((self.transform == 'fourier' and self.ft_container != 'magphase') and cover_phase is not None)
 
-        if self.embed != "multichannel":
-            if self.luma:
-                # Create a new channel with the luma values (R,G,B) -> (R,G,B,Y')
-                lumas = rgb_to_ycbcr(secret)
-                # Only keep the luma channel
-                lumas = lumas[:,0,:,:].unsqueeze(1).to(secret.device)
-                secret = torch.cat((secret,lumas),1)
-            else:
-                # Create a new channel with 0 (R,G,B) -> (R,G,B,0)
-                zero = torch.zeros(secret.shape[0],1,256,256).type(torch.float32).to(secret.device)
-                secret = torch.cat((secret,zero),1)
-        
+        # if self.embed != "multichannel":
+        #     if self.luma:
+        #         # Create a new channel with the luma values (R,G,B) -> (R,G,B,Y')
+        #         lumas = rgb_to_ycbcr(secret)
+        #         # Only keep the luma channel
+        #         lumas = lumas[:,0,:,:].unsqueeze(1).to(secret.device)
+        #         secret = torch.cat((secret,lumas),1)
+        #     else:
+        #         # Create a new channel with 0 (R,G,B) -> (R,G,B,0)
+        #         zero = torch.zeros(secret.shape[0],1,256,256).type(torch.float32).to(secret.device)
+        #         secret = torch.cat((secret,zero),1)
+
         # Encode the image using PHN
-        hidden_signal = self.PHN(secret)
+        hidden_signal, phase = self.PHN(secret)
         if self.transform == 'fourier' and self.ft_container == 'magphase' and self.mp_encoder == 'double':
+            raise NotImplementedError
             hidden_signal_phase = self.PHN_phase(secret)
-        
+
         if self.embed == 'blocks' or self.embed == 'blocks2' or self.embed == 'blocks3':
+            raise NotImplementedError
             if self.transform != 'fourier':
                 raise Exception('\'blocks\' embedding is only implemented for STFT')
             # Replicate the hidden image as many times as required (only two for STFT)
@@ -436,12 +495,13 @@ class StegoUNet(nn.Module):
             else:
                 # Else also scale with a learnable weight
                 if self.stft_small:
-                    hidden_signal = torch.cat((hidden_signal*self.encblocks[0], hidden_signal*self.encblocks[1]), 2)
+                    hidden_signal = torch.cat((hidden_signal * self.encblocks[0], hidden_signal * self.encblocks[1]), 2)
                 else:
-                    hidden_signal1 = torch.cat(tuple([hidden_signal*self.encblocks[i] for i in range(4)]), 2)
-                    hidden_signal2 = torch.cat(tuple([hidden_signal*self.encblocks[i+4] for i in range(4)]), 2)
+                    hidden_signal1 = torch.cat(tuple([hidden_signal * self.encblocks[i] for i in range(4)]), 2)
+                    hidden_signal2 = torch.cat(tuple([hidden_signal * self.encblocks[i + 4] for i in range(4)]), 2)
                     hidden_signal = torch.cat((hidden_signal1, hidden_signal2), 3)
         elif self.embed == 'multichannel':
+            raise NotImplementedError
             # Split the 8 channels and replicate. 1x8x256x256 -> 1x1x1024x512
             if self.stft_small:
                 split1 = torch.split(hidden_signal, 2, dim=1)
@@ -450,9 +510,10 @@ class StegoUNet(nn.Module):
             cat1 = torch.cat(split1, dim=2)
             split2 = torch.split(cat1, 1, dim=1)
             hidden_signal = torch.cat(split2, dim=3)
-        
+
         # Permute the encoded image if required
         if self.permutation:
+            raise NotImplementedError
             # Generate permutation index, which will be reused for the inverse
             perm_idx = torch.randperm(hidden_signal.nelement())
             # Permute the hidden signal
@@ -466,15 +527,16 @@ class StegoUNet(nn.Module):
         container = cover + hidden_signal
         orig_container = container
         if self.transform == 'fourier' and self.ft_container == 'magphase':
+            raise NotImplementedError
             if self.mp_encoder == 'double':
                 container_phase = cover_phase + hidden_signal_phase
             else:
                 container_phase = cover_phase + hidden_signal
             orig_container_phase = container_phase
 
-
         # Unpermute the encoded image if it was permuted
         if self.permutation:
+            raise NotImplementedError
             # Compute the inverse permutation
             inv_perm_idx = torch.argsort(perm_idx)
             # Permute the hidden signal with the inverse
@@ -485,23 +547,24 @@ class StegoUNet(nn.Module):
 
         # Reveal image
         if self.transform == 'fourier' and self.ft_container == 'magphase':
+            raise NotImplementedError
             if self.mp_decoder == 'unet':
                 revealed = self.RN(container, container_phase)
             else:
                 revealed = self.RN(container)
                 revealed_phase = self.RN_phase(container_phase)
                 if self.mp_join == 'mean':
-                    revealed = revealed.add(revealed_phase)*0.5
+                    revealed = revealed.add(revealed_phase) * 0.5
                 elif self.mp_join == '2D':
-                    join = torch.cat((revealed,revealed_phase),1)
+                    join = torch.cat((revealed, revealed_phase), 1)
                     revealed = self.mag_phase_join(join)
                 elif self.mp_join == '3D':
                     revealed = revealed.unsqueeze(1)
                     revealed_phase = revealed_phase.unsqueeze(1)
-                    join = torch.cat((revealed,revealed_phase),1)
+                    join = torch.cat((revealed, revealed_phase), 1)
                     revealed = self.mag_phase_join(join).squeeze(1)
             return (orig_container, orig_container_phase), revealed
         else:
             # If only using one container, reveal and return
-            revealed = self.RN(container)
+            revealed = self.RN(container, ct_phase=phase).squeeze(0)
             return orig_container, revealed

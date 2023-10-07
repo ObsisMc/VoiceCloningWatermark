@@ -41,13 +41,13 @@ def parse_keyword(keyword):
 parser = argparse.ArgumentParser()
 parser.add_argument('--beta',
                         type=float,
-                        default=0.25,
+                        default=0.5,
                         metavar='DOUBLE',
                         help='Beta hyperparameter'
                     )
 parser.add_argument('--lam',
                         type=float,
-                        default=0,
+                        default=1,
                         metavar='DOUBLE',
                         help='Lambda hyperparameter'
                     )
@@ -89,13 +89,13 @@ parser.add_argument('--batch_size',
                     )
 parser.add_argument('--experiment',
                         type=int,
-                        default=0,
+                        default=1,
                         metavar='INT',
                         help='Number of experiment'
                     )
 parser.add_argument('--summary',
                         type=str,
-                        default=None,
+                        default="Test",
                         metavar='STRING',
                         help='Summary to be shown in wandb'
                     )
@@ -107,7 +107,7 @@ parser.add_argument('--from_checkpoint',
                     )
 parser.add_argument('--transform',
                         type=str,
-                        default='cosine',
+                        default='fourier',
                         metavar='STR',
                         help='Which transform to use: [cosine] or [fourier]'
                     )
@@ -125,7 +125,7 @@ parser.add_argument('--ft_container',
                     )
 parser.add_argument('--thet',
                         type=float,
-                        default=0,
+                        default=1,
                         metavar='DOUBLE',
                         help='Theta hyperparameter (only for magphase)'
                     )
@@ -137,7 +137,7 @@ parser.add_argument('--mp_encoder',
                     )
 parser.add_argument('--mp_decoder',
                         type=str,
-                        default='double',
+                        default='unet',
                         metavar='STR',
                         help='If [fourier] and [magphase], type of magphase encoder: [unet], [double]'
                     )
