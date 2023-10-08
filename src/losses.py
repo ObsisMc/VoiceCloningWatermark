@@ -194,14 +194,14 @@ def StegoLoss(secret, cover, container, container_2x, revealed, beta, cover2=Non
     assert (cover2 is None and container2 is None) or (cover2 is not None and container2 is not None)
 
     loss_cover = F.mse_loss(cover, container)
-    if cover2 is not None:
-        # Add MSEs for magnitude and phase, weighted by theta
-        loss_cover = (1-thet) * F.mse_loss(cover2, container2) + thet * loss_cover
+    # if cover2 is not None:
+    #     # Add MSEs for magnitude and phase, weighted by theta
+    #     loss_cover = (1-thet) * F.mse_loss(cover2, container2) + thet * loss_cover
     # loss_secret = nn.L1Loss()
     loss_secret = nn.MSELoss()
-    loss_spectrum = F.mse_loss(container, container_2x)
-    if container_2x2 is not None:
-        # Also add to the loss spectrum in the mag+phase case
-        loss_spectrum += F.mse_loss(container2, container_2x2)
+    # loss_spectrum = F.mse_loss(container, container_2x)
+    # if container_2x2 is not None:
+    #     # Also add to the loss spectrum in the mag+phase case
+    #     loss_spectrum += F.mse_loss(container2, container_2x2)
     loss = (1 - beta) * (loss_cover) + beta * loss_secret(secret, revealed)
-    return loss, loss_cover, loss_secret(secret, revealed), loss_spectrum
+    return loss, loss_cover, loss_secret(secret, revealed), torch.Tensor([0.])

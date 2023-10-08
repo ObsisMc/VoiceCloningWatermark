@@ -29,40 +29,6 @@ AUDIO_FOLDER = f"{DATA_FOLDER}/FSDnoisy/FSDnoisy18k.audio_"
 IMAGE_FOLDER = f'{DATA_FOLDER}/imagenet'
 
 
-class ImageProcessor():
-    """
-    Function to preprocess the images from the custom 
-    dataset. It includes a series of transformations:
-
-    - At __init__ we convert the image to the desired [colorspace].
-    - Crop function crops the image to the desired [proportion].
-    - Scale scales the images to desired size [n]x[n].
-    - Normalize performs the normalization of the channels.
-    """
-
-    def __init__(self, image_path, colorspace='RGB'):
-        self.image = Image.open(image_path).convert(colorspace)
-
-    def crop(self, proportion=2 ** 6):
-        nx, ny = self.image.size
-        n = min(nx, ny)
-        left = top = n / proportion
-        right = bottom = (proportion - 1) * n / proportion
-        self.image = self.image.crop((left, top, right, bottom))
-
-    def scale(self, n=256):
-        self.image = self.image.resize((n, n), Image.ANTIALIAS)
-
-    def normalize(self):
-        self.image = np.array(self.image).astype('float') / 255.0
-
-    def forward(self):
-        self.crop()
-        self.scale()
-        self.normalize()
-        return self.image
-
-
 class AudioProcessor():
     """
     Function to preprocess the audios from the custom 
@@ -150,6 +116,26 @@ class AudioProcessor():
             raise Exception(f'Transform not implemented')
 
 
+def preprocess_audio(audio: str | torch.Tensor, num_points: int = 64000):
+    if isinstance(audio, str):
+        sound, sr = torchaudio.load(audio)
+    else:
+        sound = audio
+
+    C, L = sound.shape
+    if C > 1:
+        raise NotImplemented("Can only handle sounds with one channel")
+    else:
+        if L < num_points:
+            # TODO: padding zeros or others like gaussian noise
+            sound = torch.cat([sound, torch.zeros((sound.shape[0], num_points - L))], dim=1)
+        else:
+            sound = sound[:, :num_points]
+
+    sound = sound.squeeze(0)  # (L,)
+    return sound
+
+
 class StegoDataset(torch.utils.data.Dataset):
     """
     Custom datasets pairing images with spectrograms.
@@ -175,6 +161,7 @@ class StegoDataset(torch.utils.data.Dataset):
             audio_root: str,
             folder: str,
             mappings: dict,
+            num_points: int,
             rgb: bool = True,
             transform: str = 'cosine',
             stft_small: bool = True,
@@ -191,6 +178,7 @@ class StegoDataset(torch.utils.data.Dataset):
         self._colorspace = 'RGB' if rgb else 'L'
         self._transform = transform
         self._stft_small = stft_small
+        self._num_points = num_points
 
         print(f'IMAGE DATA LOCATED AT: {self._image_data_path}')
         print(f'AUDIO DATA LOCATED AT: {self._audio_data_path}')
@@ -201,32 +189,7 @@ class StegoDataset(torch.utils.data.Dataset):
         self._indices = []
         self._audios = []
 
-        # IMAGE PATH RETRIEVING
-        test_i, test_j = 0, 0
-        # keys are n90923u23
-        # if (folder == 'train'):
-        # for key in mappings.keys():
-        #     for j, img in enumerate(glob.glob(f'{self._image_data_path}/{key}/*.{self.image_extension}')):
-        #
-        #         if j >= 10: break
-        #         self._indices.append((key, re.search(r'(?<=_)\d+', img).group()))
-        #         self._index += 1
-        #
-        #         if self._index == self._MAX_LIMIT: break
-        #     if self._index == self._MAX_LIMIT: break
-
-        # elif (folder == "test"):
-        # for key in mappings.keys():
-        #     for img in glob.glob(f'{self._image_data_path}/{key}/*.{self.image_extension}'):
-        #         if test_j >= 13:
-        #             break
-        #         elif test_j >= 10:
-        #             self._indices.append((key, re.search(r'(?<=_)\d+', img).group()))
-        #             self._index += 1
-        #         test_j += 1
-        #         if self._index == self._MAX_LIMIT: break
-        #     test_j = 0
-        #     if self._index == self._MAX_LIMIT: break
+        # secrets
         self._indices = [i for i in range(self._MAX_LIMIT)]  # seed for generating random vectors
         self._index = self._MAX_LIMIT
 
@@ -240,7 +203,7 @@ class StegoDataset(torch.utils.data.Dataset):
 
             if (self._index_aud == self._MAX_AUDIO_LIMIT): break
 
-        self._AUDIO_PROCESSOR = AudioProcessor(transform=self._transform, stft_small=self._stft_small)
+        # self._AUDIO_PROCESSOR = AudioProcessor(transform=self._transform, stft_small=self._stft_small)
 
         print('Set up done')
 
@@ -248,32 +211,22 @@ class StegoDataset(torch.utils.data.Dataset):
         return self._index
 
     def __getitem__(self, index):
-        # key = self._indices[index][0]
-        # indexer = self._indices[index][1]
         rand_seq_seed = self._indices[index]
         rand_indexer = random.randint(0, self._MAX_AUDIO_LIMIT - 1)
 
-        # img_path = glob.glob(f'{self._image_data_path}/{key}/{key}_{indexer}.{self.image_extension}')[0]
         audio_path = self._audios[rand_indexer]
 
-        # img = np.asarray(ImageProcessor(image_path=img_path, colorspace=self._colorspace).forward()).astype('float64')
-        torch.manual_seed(rand_seq_seed)
-        sequence = torch.rand(32)
+        # torch.manual_seed(rand_seq_seed)
+        sequence = torch.rand(32)  # (secret_len,)
         # TODO obsismc: this may generated a sequence with regular pattern, which may be easy to learn or hack
         sequence_binary = (sequence > 0.5).int()
 
-        if self._transform == 'cosine':
-            raise NotImplemented("Cosine not implemented")
-            # sound_stct = self._AUDIO_PROCESSOR.forward(audio_path)
-            # return (img, sound_stct)
-        elif self._transform == 'fourier':
-            magnitude_stft, phase_stft = self._AUDIO_PROCESSOR.forward(audio_path)
-            return (sequence, sequence_binary), magnitude_stft, phase_stft
-        else:
-            raise Exception(f'Transform not implemented')
+        # magnitude_stft, phase_stft = self._AUDIO_PROCESSOR.forward(audio_path)
+        audio = preprocess_audio(audio_path, num_points=self._num_points)  # (L,)
+        return (sequence, sequence_binary), audio
 
 
-def loader(set='train', rgb=True, transform='cosine', stft_small=True, batch_size=1, shuffle=False):
+def loader(set='train', num_points=64000, rgb=True, transform='cosine', stft_small=True, batch_size=1, shuffle=False):
     """
     Prepares the custom dataloader.
     - [set] defines the set type. Can be either [train] or [test].
@@ -296,7 +249,8 @@ def loader(set='train', rgb=True, transform='cosine', stft_small=True, batch_siz
         mappings=mappings,
         rgb=rgb,
         transform=transform,
-        stft_small=stft_small
+        stft_small=stft_small,
+        num_points=num_points
     )
 
     print('Dataset prepared.')

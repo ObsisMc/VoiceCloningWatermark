@@ -5,12 +5,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import os
 import random
-from loader import AudioProcessor
+from loader import preprocess_audio
 from umodel import StegoUNet
 import torchaudio
 from dotenv import load_dotenv
 from losses import calc_ber, signal_noise_ratio
-from torch_stft import STFT
 
 load_dotenv()
 
@@ -81,12 +80,24 @@ parser.add_argument('--luma',
                     metavar='BOOL',
                     help='Add luma component as the fourth pixelshuffle value'
                     )
+
+parser.add_argument('--num_points',
+                    type=int,
+                    default=64000 - 400,
+                    help="the length model can handle")
+parser.add_argument('--n_fft',
+                    type=int,
+                    default=1022)
+parser.add_argument('--hop_length',
+                    type=int,
+                    default=400)
+
 pattern = [1, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0,
            0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1,
            1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1,
            1, 1, 1, 0, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 1, 1, 0,
            0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0]
-pattern = [0, 1, 1, 1, 1, 0, 1, 1, 0 ,1, 1, 1, 1, 1, 1, 1, 1 ,1, 0, 0, 1,
+pattern = [0, 1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1,
            0, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0]
 
 if __name__ == "__main__":
@@ -105,11 +116,14 @@ if __name__ == "__main__":
         mp_join=args.mp_join,
         permutation=args.permutation,
         embed=args.embed,
-        luma=args.luma
+        luma=args.luma,
+        num_points=args.num_points,
+        n_fft=args.n_fft,
+        hop_length=args.hop_length
     )
 
     # Load checkpoint
-    ckpt_path = '1-Seqence_0923/3-1-Seqence_0923.pt'
+    ckpt_path = '1-Seqence_MagPhase_1008/2-1-Seqence_MagPhase_1008.pt'
     checkpoint = torch.load(os.path.join(os.environ.get('OUT_PATH'), ckpt_path),
                             map_location='cpu')
     if torch.cuda.device_count() > 1:
@@ -121,17 +135,15 @@ if __name__ == "__main__":
     audio_name = "example1.wav"
     audio_root = os.path.join(os.environ.get('USER_PATH'), 'test_audio')
     audio_path = os.path.join(audio_root, audio_name)
-    audio_path = "/home/zrh/Repository/gitrepo/AudioMNIST/data/17/4_17_6.wav"
+    # audio_path = "/home/zrh/Repository/gitrepo/AudioMNIST/data/17/4_17_6.wav"
     sound, sr = torchaudio.load(audio_path)  # (1,len)
-    print(f"Covers' len: {sound.shape}")
-
-    processor = AudioProcessor(args.transform, args.stft_small, False)
-    mag, phase = processor.forward(sound, path=False)
-    mag = mag.unsqueeze(0)
+    print(f"original sound len: {sound.shape}")
+    sound= preprocess_audio(sound,args.num_points)
+    print(f"Preprocessed sound len: {sound.shape}")
 
     # secret  TODO solve out-of-distribution secret
-    secret = torch.normal(0.4, 0.2, (32,))
-    # secret = torch.rand(32)
+    # secret = torch.normal(0.4, 0.2, (32,))
+    secret = torch.rand(32)
     # secret = torch.tensor(pattern[:32]).float()
     # sigmoid
     # secret = 1 / (1 + torch.e**(secret - 0.5))
@@ -142,21 +154,13 @@ if __name__ == "__main__":
     # run model
     # TODO add noise
     with torch.no_grad():
-        container, revealed = model(secret, mag)
-
-    # stft
-    stft = STFT(
-        filter_length=2 ** 11 - 1 if args.stft_small else 2 ** 12 - 1,
-        hop_length=132 if args.stft_small else 66,
-        win_length=2 ** 11 - 1 if args.stft_small else 2 ** 12 - 1,
-        window='hann'
-    )
-    stft.num_samples = 67522
-    container_wav = stft.inverse(container.squeeze(1), phase.squeeze(1))
+        # (B,N,T,2), (B,N,T,2), (B,L), (secret_len)
+        cover_fft, containers_fft, container_wav, revealed = model(secret, sound)
 
     # evaluate
     # sound, container_wav = sound.detach().numpy(), container_wav.detach().numpy()
     sound_np, container_wav_np = sound.numpy(), container_wav.numpy()
+    container_wav_np = container_wav_np.squeeze(0)
     snr = signal_noise_ratio(sound_np, container_wav_np)
     ber = calc_ber(revealed, secret)
 

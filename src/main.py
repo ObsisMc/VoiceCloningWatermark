@@ -95,7 +95,7 @@ parser.add_argument('--experiment',
                     )
 parser.add_argument('--summary',
                         type=str,
-                        default="Test",
+                        default="Test_MagPhase",
                         metavar='STRING',
                         help='Summary to be shown in wandb'
                     )
@@ -166,10 +166,20 @@ parser.add_argument('--luma',
                         help='Add luma component as the fourth pixelshuffle value'
                     )
 
+# need to design to fit U-net -> fft to (512,160,2)
+parser.add_argument('--num_points',
+                    type=int,
+                    default=64000 - 400,
+                    help="the length model can handle")
+parser.add_argument('--n_fft',
+                    type=int,
+                    default=1022)
+parser.add_argument('--hop_length',
+                    type=int,
+                    default=400)
 
 
 if __name__ == '__main__':
-    
     set_reproductibility()
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Using device: {DEVICE}')
@@ -182,14 +192,16 @@ if __name__ == '__main__':
         transform=args.transform,
         stft_small=args.stft_small,
         batch_size=args.batch_size,
-        shuffle=True
+        shuffle=True,
+        num_points=args.num_points
     )
     test_loader = loader(
         set='test',
         transform=args.transform,
         stft_small=args.stft_small,
         batch_size=args.batch_size,
-        shuffle=True
+        shuffle=True,
+        num_points=args.num_points
     )
 
     model = StegoUNet(
@@ -201,7 +213,10 @@ if __name__ == '__main__':
         mp_join=args.mp_join,
         permutation=args.permutation,
         embed=args.embed,
-        luma=args.luma
+        luma=args.luma,
+        num_points=args.num_points,
+        n_fft=args.n_fft,
+        hop_length=args.hop_length
     )
 
     if args.from_checkpoint:

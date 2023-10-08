@@ -1,6 +1,6 @@
 #!/bin/bash
 
-beta=0.75
+beta=0.5
 lam=1
 dtw=false
 lr=0.001
@@ -9,7 +9,7 @@ val_size=50
 num_epochs=3
 batch_size=1
 experiment=1
-summary="Seqence_0923_2"
+summary="Seqence_MagPhase_1008_2"
 from_checkpoint=false
 permutation=false
 transform="fourier"
