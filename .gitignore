@@ -3,4 +3,3 @@ src/wandb
 scripts/Outputs
 src/__pycache__
 logs
-.env*
