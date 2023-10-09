@@ -169,19 +169,20 @@ class PrepHidingNet(nn.Module):
 
     def stft(self, data):
         window = torch.hann_window(self.n_fft).to(data.device)
-        tmp = torch.stft(data, n_fft=self.n_fft, hop_length=self.hop_length, window=window, return_complex=False)
+        tmp = torch.stft(data, n_fft=self.n_fft, hop_length=self.hop_length, window=window, return_complex=True)
         return tmp
 
     def forward(self, seq):
         # TODO obsismc: the batch size must be 1
         seq = self.fc(seq)  # (B,L)
-        seq_fft = self.stft(seq)  # (B,N,T,C)
-        mag, phase = seq_fft[..., 0].unsqueeze(-1), seq_fft[..., 1].unsqueeze(-1)
+        seq_fft_img = self.stft(seq)
+        seq_fft_real = torch.view_as_real(seq_fft_img) # (B,N,T,C)
+        mag, phase = seq_fft_real[..., 0].unsqueeze(-1), seq_fft_real[..., 1].unsqueeze(-1)
         if self.mag:
-            seq_fft = mag
-        seq_fft = seq_fft.permute(0, 3, 1, 2)  # (B,C,N,T)
+            seq_fft_real = mag
+        seq_fft_real = seq_fft_real.permute(0, 3, 1, 2)  # (B,C,N,T)
 
-        seq_wavs_down = [seq_fft]
+        seq_wavs_down = [seq_fft_real]
         # Encoder part of the UNet
         for enc_layer_idx, enc_layer in enumerate(self.im_encoder_layers):
             seq_wavs_down.append(enc_layer(seq_wavs_down[-1]))
@@ -251,11 +252,12 @@ class RevealNet(nn.Module):
         revealed = ct_up[-1]
 
         # obsismc: sequence
-        revealed = revealed.permute(0, 2, 3, 1)  # (B,N,T,C)
+        revealed = revealed.permute(0, 2, 3, 1).contiguous()  # (B,N,T,C)
         if self.mag:
-            revealed = self.istft(torch.cat([revealed, phase], dim=-1))
+            spec_img = torch.view_as_complex(torch.cat([revealed, phase], dim=-1))
         else:
-            revealed = self.istft(revealed)
+            spec_img = torch.view_as_complex(revealed)
+        revealed = self.istft(spec_img)
         revealed = self.fc(revealed)
 
         return revealed  # (B,secret_len)
@@ -299,7 +301,7 @@ class StegoUNet(nn.Module):
 
     def stft(self, data):
         window = torch.hann_window(self.n_fft).to(data.device)
-        tmp = torch.stft(data, n_fft=self.n_fft, hop_length=self.hop_length, window=window, return_complex=False)
+        tmp = torch.stft(data, n_fft=self.n_fft, hop_length=self.hop_length, window=window, return_complex=True)
         return tmp
 
     def istft(self, signal_wmd_fft):
@@ -320,17 +322,19 @@ class StegoUNet(nn.Module):
 
         # Residual connection
         # Also keep a copy of the unpermuted containers to compute the loss
-        cover_fft = self.stft(cover)  # (B,N,T,2)
-        mag, phase = cover_fft[..., 0].unsqueeze(-1), cover_fft[..., 1].unsqueeze(-1)
+        cover_fft_img = self.stft(cover)
+        cover_fft_real = torch.view_as_real(cover_fft_img)   # (B,N,T,2)
+        mag, phase = cover_fft_real[..., 0].unsqueeze(-1), cover_fft_real[..., 1].unsqueeze(-1)
         if self.mag:
-            cover_fft = mag
-        container_fft = cover_fft + hidden_signal
+            cover_fft_real = mag
+        container_fft = cover_fft_real + hidden_signal
 
         origin_ct_fft = container_fft  # (B,N,T,C)
         if self.mag:
-            origin_ct_wav = self.istft(torch.cat([container_fft, phase], dim=-1))
+            spec_img = torch.view_as_complex(torch.cat([container_fft, phase], dim=-1).contiguous())
         else:
-            origin_ct_wav = self.istft(container_fft)  # (B,L)
+            spec_img = torch.view_as_complex(container_fft.contiguous())
+        origin_ct_wav = self.istft(spec_img)  # (B,L)
 
         revealed = self.RN(container_fft, phase=None if not self.mag else hidden_phase)  # (B,secret_len)
-        return cover_fft, origin_ct_fft, origin_ct_wav, revealed
+        return cover_fft_real, origin_ct_fft, origin_ct_wav, revealed

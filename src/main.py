@@ -41,7 +41,7 @@ def parse_keyword(keyword):
 parser = argparse.ArgumentParser()
 parser.add_argument('--beta',
                         type=float,
-                        default=0.75,
+                        default=0.5,
                         metavar='DOUBLE',
                         help='Beta hyperparameter'
                     )
@@ -95,7 +95,7 @@ parser.add_argument('--experiment',
                     )
 parser.add_argument('--summary',
                         type=str,
-                        default="Test_Mag",
+                        default="Test",
                         metavar='STRING',
                         help='Summary to be shown in wandb'
                     )
@@ -179,7 +179,7 @@ parser.add_argument('--hop_length',
                     default=400)
 parser.add_argument("--mag",
                     type=bool,
-                    default=True,
+                    default=False,
                     help="only use magnitude")
 
 
