@@ -12,9 +12,9 @@ import numpy as np
 import torch
 import os
 import random
-from loader import loader
-from umodel import StegoUNet
-from train import train, validate
+from src.loader import loader
+from src.umodel import StegoUNet
+from src.train import train, validate
 import torch.nn as nn
 
 # torch.backends.cudnn.benchmark=True

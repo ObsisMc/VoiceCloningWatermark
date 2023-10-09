@@ -16,9 +16,7 @@ import numpy as np
 import torch.nn as nn
 from torch import utils
 import torch.nn.functional as F
-from pystct import sdct_torch, isdct_torch
-from loader import AudioProcessor
-from torch_stft import STFT
+from src.loader import AudioProcessor
 
 
 def rgb_to_ycbcr(img):

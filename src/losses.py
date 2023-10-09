@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-from pystct import isdct
 import torch.nn.functional as F
 import torch.nn as nn
 from torch.autograd import Variable
