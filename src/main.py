@@ -41,7 +41,7 @@ def parse_keyword(keyword):
 parser = argparse.ArgumentParser()
 parser.add_argument('--beta',
                         type=float,
-                        default=0.5,
+                        default=0.75,
                         metavar='DOUBLE',
                         help='Beta hyperparameter'
                     )
@@ -95,7 +95,7 @@ parser.add_argument('--experiment',
                     )
 parser.add_argument('--summary',
                         type=str,
-                        default="Test_MagPhase",
+                        default="Test_Mag",
                         metavar='STRING',
                         help='Summary to be shown in wandb'
                     )
@@ -177,6 +177,10 @@ parser.add_argument('--n_fft',
 parser.add_argument('--hop_length',
                     type=int,
                     default=400)
+parser.add_argument("--mag",
+                    type=bool,
+                    default=True,
+                    help="only use magnitude")
 
 
 if __name__ == '__main__':
@@ -216,7 +220,8 @@ if __name__ == '__main__':
         luma=args.luma,
         num_points=args.num_points,
         n_fft=args.n_fft,
-        hop_length=args.hop_length
+        hop_length=args.hop_length,
+        mag=args.mag
     )
 
     if args.from_checkpoint:

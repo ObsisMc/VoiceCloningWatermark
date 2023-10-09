@@ -105,7 +105,7 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
             optimizer.zero_grad()
 
             # Forward through the model
-            # (B,N,T,2), (B,N,T,2), (B,L), (B,secret_len)
+            # (B,N,T,C), (B,N,T,C), (B,L), (B,secret_len)
             cover_fft, containers_fft, container_wav, revealed = model(secrets, covers)
 
             # Compute the loss
@@ -115,6 +115,10 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
             container_wav = container_wav.squeeze(0)
             # container_2x = stft.transform(container_wav)[0].unsqueeze(1)  # TODO: obsismc: why have this?
             # TODO: what is loss_spectrum
+            # print(
+                # f"before loss: cover_fft shape: {cover_fft.shape}, containters_fft shape: {containers_fft.shape}, "
+                # f"secrets shape:{secrets.shape}, revealed shape:{revealed.shape}, original_wav: {original_wav.shape},"
+                # f"container_wav: {container_wav.shape}")
             loss, loss_cover, loss_secret, loss_spectrum = StegoLoss(secrets, cover_fft, containers_fft, None,
                                                                      revealed, beta)
 
