@@ -16,7 +16,7 @@ import numpy as np
 import torch.nn as nn
 from torch import utils
 import torch.nn.functional as F
-from src.loader import AudioProcessor
+from src.loader import AudioProcessor, preprocess_audio
 
 
 def rgb_to_ycbcr(img):
@@ -73,6 +73,20 @@ def istft(data, n_fft, hop_length):
     window = torch.hann_window(n_fft).to(data.device)
     return torch.istft(data, n_fft=n_fft, hop_length=hop_length, window=window,
                        return_complex=False)
+
+
+def spec2magphase(spec: torch.Tensor):
+    rea = spec[..., 0]
+    imag = spec[..., 1]
+    mag = torch.sqrt(rea ** 2 + imag ** 2).to(spec.device).unsqueeze(-1)
+    phase = torch.atan2(imag, rea).to(spec.device).unsqueeze(-1)
+    return mag, phase
+
+
+def magphase2spec(mag: torch.Tensor, phase: torch.Tensor):
+    r = mag * torch.cos(phase)
+    i = mag * torch.sin(phase)
+    return torch.cat([r, i], dim=-1).to(mag.device)
 
 
 class PixelUnshuffle(nn.Module):
@@ -174,9 +188,10 @@ class PrepHidingNet(nn.Module):
         # TODO obsismc: the batch size must be 1
         seq = self.fc(seq)  # (B,L)
         seq_fft_img = self.stft(seq)
-        seq_fft_real = torch.view_as_real(seq_fft_img) # (B,N,T,C)
-        mag, phase = seq_fft_real[..., 0].unsqueeze(-1), seq_fft_real[..., 1].unsqueeze(-1)
+        seq_fft_real = torch.view_as_real(seq_fft_img)  # (B,N,T,C)
+        phase = None
         if self.mag:
+            mag, phase = spec2magphase(seq_fft_real)
             seq_fft_real = mag
         seq_fft_real = seq_fft_real.permute(0, 3, 1, 2)  # (B,C,N,T)
 
@@ -252,11 +267,13 @@ class RevealNet(nn.Module):
         # obsismc: sequence
         revealed = revealed.permute(0, 2, 3, 1).contiguous()  # (B,N,T,C)
         if self.mag:
-            spec_img = torch.view_as_complex(torch.cat([revealed, phase], dim=-1))
+            spec = magphase2spec(revealed, phase)
+            spec_img = torch.view_as_complex(spec.contiguous())
         else:
             spec_img = torch.view_as_complex(revealed)
         revealed = self.istft(spec_img)
         revealed = self.fc(revealed)
+        revealed = torch.sigmoid(revealed)
 
         return revealed  # (B,secret_len)
 
@@ -297,9 +314,10 @@ class StegoUNet(nn.Module):
         self.RN = RevealNet(self.mp_decoder, self.stft_small, self.embed, self.luma, num_points=self.num_points,
                             n_fft=self.n_fft, hop_length=self.hop_length, mag=self.mag)
 
-    def stft(self, data):
+    def stft(self, data, return_complex=True):
         window = torch.hann_window(self.n_fft).to(data.device)
-        tmp = torch.stft(data, n_fft=self.n_fft, hop_length=self.hop_length, window=window, return_complex=True)
+        tmp = torch.stft(data, n_fft=self.n_fft, hop_length=self.hop_length, window=window,
+                         return_complex=return_complex)
         return tmp
 
     def istft(self, signal_wmd_fft):
@@ -321,18 +339,64 @@ class StegoUNet(nn.Module):
         # Residual connection
         # Also keep a copy of the unpermuted containers to compute the loss
         cover_fft_img = self.stft(cover)
-        cover_fft_real = torch.view_as_real(cover_fft_img)   # (B,N,T,2)
-        mag, phase = cover_fft_real[..., 0].unsqueeze(-1), cover_fft_real[..., 1].unsqueeze(-1)
+        cover_fft_real = torch.view_as_real(cover_fft_img)  # (B,N,T,2)
         if self.mag:
+            mag, phase = spec2magphase(cover_fft_real)
             cover_fft_real = mag
-        container_fft = cover_fft_real + hidden_signal
+        container_fft = cover_fft_real + hidden_signal  # (B,N,T,C)
 
-        origin_ct_fft = container_fft  # (B,N,T,C)
+        return_ct_fft = container_fft  # (B,N,T,C)
         if self.mag:
-            spec_img = torch.view_as_complex(torch.cat([container_fft, phase], dim=-1).contiguous())
+            spec = magphase2spec(container_fft, phase)
+            spec_img = torch.view_as_complex(spec.contiguous())
         else:
             spec_img = torch.view_as_complex(container_fft.contiguous())
         origin_ct_wav = self.istft(spec_img)  # (B,L)
 
-        revealed = self.RN(container_fft, phase=None if not self.mag else hidden_phase)  # (B,secret_len)
-        return cover_fft_real, origin_ct_fft, origin_ct_wav, revealed
+        # transform
+        # TODO stft won't give out the same spectogram
+        origin_ct_fft_img = self.stft(origin_ct_wav)
+        origin_ct_fft = torch.view_as_real(origin_ct_fft_img)
+        if self.mag:
+            mag_tf, phase_tf = spec2magphase(origin_ct_fft)
+            origin_ct_fft = mag_tf
+
+        # decode
+        revealed = self.RN(origin_ct_fft, phase=None if not self.mag else hidden_phase)  # (B,secret_len)
+        return cover_fft_real, return_ct_fft, origin_ct_wav, revealed
+
+    def inference(self, secret, cover):
+        assert self.mag == False
+
+        hidden_signal, hidden_phase = self.PHN(secret)  # (B,N,T,C)
+
+        # Residual connection
+        # Also keep a copy of the unpermuted containers to compute the loss
+        # Encode
+        cover_fft_img = self.stft(cover)
+        cover_fft_real = torch.view_as_real(cover_fft_img)  # (B,N,T,2)
+        container_fft = cover_fft_real + hidden_signal
+
+        origin_ct_fft = container_fft  # (B,N,T,C)
+        spec_img = torch.view_as_complex(container_fft.contiguous())
+        origin_ct_wav = self.istft(spec_img)  # (B,L)
+        # print(f"origin_ct_wav: {origin_ct_wav.shape}, {origin_ct_wav[:, :10]}")
+
+        # transform
+        # print(f"origin_ct_wav: {origin_ct_wav.shape}")
+        ct_tsfm_wav = origin_ct_wav[:,:]
+        ct_tsfm_wav = preprocess_audio(ct_tsfm_wav, self.num_points).unsqueeze(0)
+        # print(f"ct_tsfm_wav: {ct_tsfm_wav.shape}")
+
+        ct_tsfm_img = self.stft(ct_tsfm_wav)
+        ct_tsfm_real = torch.view_as_real(ct_tsfm_img)
+        # print(f"origin_ct_fft: {origin_ct_fft[:, :5, :5, :]}")
+        # print(f"ct_tsfm_real: {ct_tsfm_real[:, :5, :5, :]}")
+
+        ct_tsfm_wav = self.istft(ct_tsfm_img)
+        # print(f"ct_tsfm_wav: {ct_tsfm_wav.shape}, {ct_tsfm_wav[:, :10]}")
+
+        # decode
+        # print(f"ct_tsfm_real: {ct_tsfm_real.shape}")
+        revealed = self.RN(ct_tsfm_real, phase=None)  # (B,secret_len)
+        return cover_fft_real, origin_ct_fft, origin_ct_wav, ct_tsfm_wav, revealed

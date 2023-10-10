@@ -202,5 +202,6 @@ def StegoLoss(secret, cover, container, container_2x, revealed, beta, cover2=Non
     # if container_2x2 is not None:
     #     # Also add to the loss spectrum in the mag+phase case
     #     loss_spectrum += F.mse_loss(container2, container_2x2)
-    loss = (1 - beta) * (loss_cover) + beta * loss_secret(secret, revealed)
+    loss = (1 - beta) * (loss_cover) + beta * loss_secret(secret, revealed)  # TODO: limit revealed output range
+    # loss = beta * loss_secret(secret, revealed)
     return loss, loss_cover, loss_secret(secret, revealed), torch.Tensor([0.])

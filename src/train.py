@@ -67,16 +67,6 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
     else:
         l1wavLoss = nn.L1Loss()
 
-    # Initialize STFT transform constructor
-    if transform == 'fourier':
-        stft = STFT(
-            filter_length=2 ** 11 - 1 if stft_small else 2 ** 12 - 1,
-            hop_length=132 if stft_small else 66,
-            win_length=2 ** 11 - 1 if stft_small else 2 ** 12 - 1,
-            window='hann'
-        ).to(device)
-        stft.num_samples = 67522
-
     # Start training ...
     for epoch in range(epochs):
 
@@ -194,7 +184,7 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
                 criterion = softDTW if dtw else l1wavLoss
                 avg_valid_loss, avg_valid_loss_cover, avg_valid_loss_secret, avg_valid_snr, avg_valid_psnr, avg_valid_ssim, avg_valid_wav, avg_valid_ber = validate(
                     model, vd_loader, beta, val_size=val_size, transform=transform,
-                    transform_constructor=stft if transform == 'fourier' else None, ft_container=ft_container,
+                    transform_constructor=None, ft_container=ft_container,
                     wav_criterion=criterion, tr_i=i, epoch=epoch)
 
                 vd_loss.append(avg_valid_loss)

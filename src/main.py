@@ -95,7 +95,7 @@ parser.add_argument('--experiment',
                     )
 parser.add_argument('--summary',
                         type=str,
-                        default="Test",
+                        default="Test_tf_MagPhase",
                         metavar='STRING',
                         help='Summary to be shown in wandb'
                     )
