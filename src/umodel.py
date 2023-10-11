@@ -18,48 +18,8 @@ from torch import utils
 import torch.nn.functional as F
 from src.loader import AudioProcessor, preprocess_audio
 
-
-def rgb_to_ycbcr(img):
-    # Taken from https://www.w3.org/Graphics/JPEG/jfif3.pdf
-    # img is mini-batch N x 3 x H x W of an RGB image
-
-    output = torch.zeros(img.shape).to(img.device)
-
-    output[:, 0, :, :] = 0.2990 * img[:, 0, :, :] + 0.5870 * img[:, 1, :, :] + 0.1114 * img[:, 2, :, :]
-    output[:, 1, :, :] = -0.1687 * img[:, 0, :, :] - 0.3313 * img[:, 1, :, :] + 0.5000 * img[:, 2, :, :] + 128
-    output[:, 2, :, :] = 0.5000 * img[:, 0, :, :] - 0.4187 * img[:, 1, :, :] - 0.0813 * img[:, 2, :, :] + 128
-
-    return output
-
-
-def ycbcr_to_rgb(img):
-    # Taken from https://www.w3.org/Graphics/JPEG/jfif3.pdf
-    # img is mini-batch N x 3 x H x W of a YCbCr image
-
-    output = torch.zeros(img.shape).to(img.device)
-
-    output[:, 0, :, :] = img[:, 0, :, :] + 1.40200 * (img[:, 2, :, :] - 128)
-    output[:, 1, :, :] = img[:, 0, :, :] - 0.34414 * (img[:, 1, :, :] - 128) - 0.71414 * (img[:, 2, :, :] - 128)
-    output[:, 2, :, :] = img[:, 0, :, :] + 1.77200 * (img[:, 1, :, :] - 128)
-
-    return output
-
-
-def pixel_unshuffle(img, downscale_factor):
-    '''
-    input: batchSize * c * k*w * k*h
-    kdownscale_factor: k
-    batchSize * c * k*w * k*h -> batchSize * k*k*c * w * h
-    '''
-    c = img.shape[1]
-
-    kernel = torch.zeros(size=[downscale_factor * downscale_factor * c,
-                               1, downscale_factor, downscale_factor],
-                         device=img.device, dtype=img.dtype)
-    for y in range(downscale_factor):
-        for x in range(downscale_factor):
-            kernel[x + y * downscale_factor::downscale_factor * downscale_factor, 0, y, x] = 1
-    return F.conv2d(img, kernel, stride=downscale_factor, groups=c)
+from utils.prompt_making import make_prompt
+from utils.generation import SAMPLE_RATE, generate_audio, preload_models
 
 
 def stft(self, data):
@@ -384,7 +344,7 @@ class StegoUNet(nn.Module):
 
         # transform
         # print(f"origin_ct_wav: {origin_ct_wav.shape}")
-        ct_tsfm_wav = origin_ct_wav[:,:]
+        ct_tsfm_wav = origin_ct_wav[:, :]
         ct_tsfm_wav = preprocess_audio(ct_tsfm_wav, self.num_points).unsqueeze(0)
         # print(f"ct_tsfm_wav: {ct_tsfm_wav.shape}")
 
@@ -400,3 +360,52 @@ class StegoUNet(nn.Module):
         # print(f"ct_tsfm_real: {ct_tsfm_real.shape}")
         revealed = self.RN(ct_tsfm_real, phase=None)  # (B,secret_len)
         return cover_fft_real, origin_ct_fft, origin_ct_wav, ct_tsfm_wav, revealed
+
+    def encode(self, secret, cover):
+        # Encode the image using PHN
+        hidden_signal, hidden_phase = self.PHN(secret)  # (B,N,T,C)
+
+        # Residual connection
+        # Also keep a copy of the unpermuted containers to compute the loss
+        cover_fft_img = self.stft(cover)
+        cover_fft_real = torch.view_as_real(cover_fft_img)  # (B,N,T,2)
+        if self.mag:
+            mag, phase = spec2magphase(cover_fft_real)
+            cover_fft_real = mag
+        container_fft = cover_fft_real + hidden_signal  # (B,N,T,C)
+
+        if self.mag:
+            spec = magphase2spec(container_fft, phase)
+            spec_img = torch.view_as_complex(spec.contiguous())
+        else:
+            spec_img = torch.view_as_complex(container_fft.contiguous())
+        container_wav = self.istft(spec_img)  # (B,L)
+        return container_wav
+
+    def decode(self, audio, hidden_phase=None):
+        audio = preprocess_audio(audio, self.num_points).unsqueeze(0)
+        audio_stft_img = self.stft(audio)
+        audio_stft_real = torch.view_as_real(audio_stft_img)
+        if self.mag:
+            mag_tf, phase_tf = spec2magphase(audio_stft_real)
+            audio_stft_real = mag_tf
+
+        # decode
+        secret = self.RN(audio_stft_real, phase=None if not self.mag else hidden_phase)  # (B,secret_len)
+        return secret
+
+
+class VoiceCloner:
+    def __init__(self):
+        preload_models()
+
+    def clone(self, audio_prompt_path: str, text_prompt: str, transcript=None):
+        if transcript is not None:
+            make_prompt(name="clone", audio_prompt_path=audio_prompt_path, transcript=transcript)
+        else:
+            make_prompt(name="clone", audio_prompt_path=audio_prompt_path)
+
+        # TODO: return numpy, which means cannot backprop gradient
+        audio_array = generate_audio(text_prompt, prompt="clone")
+        audio_array = torch.tensor(audio_array).unsqueeze(0)
+        return audio_array, SAMPLE_RATE
