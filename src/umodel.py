@@ -15,11 +15,15 @@ import torch
 import numpy as np
 import torch.nn as nn
 from torch import utils
+import torchaudio
 import torch.nn.functional as F
-from src.loader import AudioProcessor, preprocess_audio
+from src.loader import preprocess_audio
 
-from utils.prompt_making import make_prompt
-from utils.generation import SAMPLE_RATE, generate_audio, preload_models
+try:
+    from utils.prompt_making import make_prompt
+    from utils.generation import SAMPLE_RATE, generate_audio, preload_models
+except:
+    print("\033[31mCannot Use Voice Cloning!\033[0m")
 
 
 def stft(self, data):
@@ -38,7 +42,7 @@ def istft(data, n_fft, hop_length):
 def spec2magphase(spec: torch.Tensor):
     rea = spec[..., 0]
     imag = spec[..., 1]
-    mag = torch.sqrt(rea ** 2 + imag ** 2).to(spec.device).unsqueeze(-1)
+    mag = torch.sqrt(rea ** 2 + imag ** 2 + 1e-5).to(spec.device).unsqueeze(-1)
     phase = torch.atan2(imag, rea).to(spec.device).unsqueeze(-1)
     return mag, phase
 
@@ -47,15 +51,6 @@ def magphase2spec(mag: torch.Tensor, phase: torch.Tensor):
     r = mag * torch.cos(phase)
     i = mag * torch.sin(phase)
     return torch.cat([r, i], dim=-1).to(mag.device)
-
-
-class PixelUnshuffle(nn.Module):
-    def __init__(self, downscale_factor):
-        super(PixelUnshuffle, self).__init__()
-        self.downscale_factor = downscale_factor
-
-    def forward(self, img):
-        return pixel_unshuffle(img, self.downscale_factor)
 
 
 class DoubleConv(nn.Module):
@@ -179,7 +174,6 @@ class RevealNet(nn.Module):
         super(RevealNet, self).__init__()
 
         self.mp_decoder = mp_decoder
-        self.pixel_unshuffle = PixelUnshuffle(2)
         self._stft_small = stft_small
         self.embed = embed
         self.luma = luma
@@ -236,6 +230,48 @@ class RevealNet(nn.Module):
         revealed = torch.sigmoid(revealed)
 
         return revealed  # (B,secret_len)
+
+
+class Transform(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, wav, num_points, name, data_dict):
+        wav_l = wav.size(1)
+        device = wav.device
+        if name == "ID":
+            pass
+        elif name == "TC":  # truncate
+            alpha = torch.randint(3, 10, (1,))
+            wav = wav[:, :int(num_points * alpha / 10)]
+        elif name == "RS":  # resample to make it longer
+            alpha = torch.rand(1) * 4 + 1
+            wav = torchaudio.transforms.Resample(10000, int(10000 * alpha.item()))(wav)
+        elif name == "VC":
+            try:
+                audio_prompt_path, transcript = data_dict["audio_prompt_path"], data_dict["transcript"]
+                text_prompt = data_dict["text_prompt"]
+            except:
+                raise ValueError(
+                    "Voice Cloning needs a data_dict whose keys are 'audio_prompt_path', 'transcript', 'text_prompt'")
+
+            preload_models()
+            if transcript is not None:
+                make_prompt(name="clone", audio_prompt_path=audio_prompt_path, transcript=transcript)
+            else:
+                make_prompt(name="clone", audio_prompt_path=audio_prompt_path)
+
+            wav = generate_audio(text_prompt, prompt="clone")
+            wav = torch.tensor(wav).unsqueeze(0).to(device)
+        else:
+            raise ValueError("Invalid transform name")
+
+        ctx.save_for_backward(wav, torch.tensor(wav_l))
+        wav = preprocess_audio(wav, num_points).unsqueeze(0)
+        return wav
+
+    @staticmethod
+    def backward(ctx, grad_outputs):
+        wav, wav_l = ctx.saved_tensors
+        return grad_outputs[:wav_l], None, None, None
 
 
 class StegoUNet(nn.Module):
@@ -315,7 +351,9 @@ class StegoUNet(nn.Module):
 
         # transform
         # TODO stft won't give out the same spectogram
-        origin_ct_fft_img = self.stft(origin_ct_wav)
+        origin_ct_tf = Transform.apply(origin_ct_wav, self.num_points, "TC", None)
+
+        origin_ct_fft_img = self.stft(origin_ct_tf)
         origin_ct_fft = torch.view_as_real(origin_ct_fft_img)
         if self.mag:
             mag_tf, phase_tf = spec2magphase(origin_ct_fft)
@@ -324,42 +362,6 @@ class StegoUNet(nn.Module):
         # decode
         revealed = self.RN(origin_ct_fft, phase=None if not self.mag else hidden_phase)  # (B,secret_len)
         return cover_fft_real, return_ct_fft, origin_ct_wav, revealed
-
-    def inference(self, secret, cover):
-        assert self.mag == False
-
-        hidden_signal, hidden_phase = self.PHN(secret)  # (B,N,T,C)
-
-        # Residual connection
-        # Also keep a copy of the unpermuted containers to compute the loss
-        # Encode
-        cover_fft_img = self.stft(cover)
-        cover_fft_real = torch.view_as_real(cover_fft_img)  # (B,N,T,2)
-        container_fft = cover_fft_real + hidden_signal
-
-        origin_ct_fft = container_fft  # (B,N,T,C)
-        spec_img = torch.view_as_complex(container_fft.contiguous())
-        origin_ct_wav = self.istft(spec_img)  # (B,L)
-        # print(f"origin_ct_wav: {origin_ct_wav.shape}, {origin_ct_wav[:, :10]}")
-
-        # transform
-        # print(f"origin_ct_wav: {origin_ct_wav.shape}")
-        ct_tsfm_wav = origin_ct_wav[:, :]
-        ct_tsfm_wav = preprocess_audio(ct_tsfm_wav, self.num_points).unsqueeze(0)
-        # print(f"ct_tsfm_wav: {ct_tsfm_wav.shape}")
-
-        ct_tsfm_img = self.stft(ct_tsfm_wav)
-        ct_tsfm_real = torch.view_as_real(ct_tsfm_img)
-        # print(f"origin_ct_fft: {origin_ct_fft[:, :5, :5, :]}")
-        # print(f"ct_tsfm_real: {ct_tsfm_real[:, :5, :5, :]}")
-
-        ct_tsfm_wav = self.istft(ct_tsfm_img)
-        # print(f"ct_tsfm_wav: {ct_tsfm_wav.shape}, {ct_tsfm_wav[:, :10]}")
-
-        # decode
-        # print(f"ct_tsfm_real: {ct_tsfm_real.shape}")
-        revealed = self.RN(ct_tsfm_real, phase=None)  # (B,secret_len)
-        return cover_fft_real, origin_ct_fft, origin_ct_wav, ct_tsfm_wav, revealed
 
     def encode(self, secret, cover):
         # Encode the image using PHN
@@ -380,7 +382,7 @@ class StegoUNet(nn.Module):
         else:
             spec_img = torch.view_as_complex(container_fft.contiguous())
         container_wav = self.istft(spec_img)  # (B,L)
-        return container_wav
+        return container_wav, hidden_phase
 
     def decode(self, audio, hidden_phase=None):
         audio = preprocess_audio(audio, self.num_points).unsqueeze(0)

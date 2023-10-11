@@ -41,7 +41,7 @@ def parse_keyword(keyword):
 parser = argparse.ArgumentParser()
 parser.add_argument('--beta',
                         type=float,
-                        default=0.5,
+                        default=0.4,
                         metavar='DOUBLE',
                         help='Beta hyperparameter'
                     )
@@ -95,7 +95,7 @@ parser.add_argument('--experiment',
                     )
 parser.add_argument('--summary',
                         type=str,
-                        default="Test_tf_MagPhase",
+                        default="Test_MagPhase_truncate",
                         metavar='STRING',
                         help='Summary to be shown in wandb'
                     )

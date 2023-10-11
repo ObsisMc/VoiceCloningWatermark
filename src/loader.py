@@ -25,111 +25,31 @@ AUDIO_FOLDER = f"{DATA_FOLDER}/FSDnoisy/FSDnoisy18k.audio_"
 IMAGE_FOLDER = f'{DATA_FOLDER}/imagenet'
 
 
-class AudioProcessor():
-    """
-    Function to preprocess the audios from the custom 
-    dataset. We set the [_limit] in terms of samples,
-    the [_frame_length] and [_frame_step] of the [transform]
-    transform. 
-
-    If transform is [cosine] it returns just the STDCT matrix.
-    Else, if transform is [fourier] returns the STFT magnitude
-    and phase.
-    """
-
-    def __init__(self, transform, stft_small=True, random_init=True):
-        # Corresponds to 1.5 seconds approximately
-        if transform == 'cosine':
-            self._frame_length = 2 ** 10
-            self._frame_step = 2 ** 7 + 2
-        else:
-            if stft_small:
-                self._frame_length = 2 ** 11 - 1
-                self._frame_step = 2 ** 7 + 4
-            else:
-                self._frame_length = 2 ** 12 - 1
-                self._frame_step = 2 ** 6 + 2
-
-        self.random_init = random_init
-
-        self._transform = transform
-        if self._transform == 'fourier':
-            self.stft = STFT(
-                filter_length=self._frame_length,
-                hop_length=self._frame_step,
-                win_length=self._frame_length,
-                window='hann'
-            )
-
-    @property
-    def _limit(self):
-        return 67522  # 2 ** 16 + 2 ** 11 - 2 ** 6 + 2
-
-    def get_frame_length(self):
-        return self._frame_length
-
-    def get_frame_step(self):
-        return self._frame_step
-
-    def forward(self, audio_path, path=True):
-        if path:
-            self.sound, self.sr = torchaudio.load(audio_path)
-
-            # Get the samples dimension
-            sound = self.sound[0]
-        else:
-            sound = audio_path[0]
-
-        # Create a temporary array
-        tmp = torch.zeros([self._limit, ])
-
-        # Check if the audio is shorter than the limit
-        if sound.numel() < self._limit:
-            # Zero-pad at the end, or randomly at both start and end
-            if self.random_init:
-                i = random.randint(0, self._limit - len(sound))
-                tmp[i:i + sound.numel()] = sound[:]
-            else:
-                tmp[:sound.numel()] = sound[:]
-        else:
-            # Use only part of the audio. Either start at beginning or random
-            if self.random_init:
-                i = random.randint(0, len(sound) - self._limit)
-            else:
-                i = 0
-            tmp[:] = sound[i:i + self._limit]
-
-        if self._transform == 'cosine':
-            return sdct_torch(
-                tmp.type(torch.float32),
-                frame_length=self._frame_length,
-                frame_step=self._frame_step
-            )
-        elif self._transform == 'fourier':
-            magnitude, phase = self.stft.transform(tmp.unsqueeze(0).type(torch.float32))
-            return magnitude, phase
-        else:
-            raise Exception(f'Transform not implemented')
-
-
-def preprocess_audio(audio: str | torch.Tensor, num_points: int = 64000):
+def preprocess_audio(audio: str | torch.Tensor, num_points: int = 64000, padding="zeros"):
     if isinstance(audio, str):
         sound, sr = torchaudio.load(audio)
     else:
         sound = audio
 
+    device = sound.device
     C, L = sound.shape
     if C > 1:
         raise NotImplemented("Can only handle sounds with one channel")
     else:
         if L < num_points:
             # TODO: padding zeros or others like gaussian noise
-            sound = torch.cat([sound, torch.zeros((sound.shape[0], num_points - L))], dim=1)
+            if padding == "zeros":
+                pad_vec = torch.zeros((sound.shape[0], num_points - L)).to(device)
+            elif padding == "gaussian":
+                pad_vec = torch.randn(sound.shape[0], num_points - L).to(device)
+            else:
+                raise ValueError("Invalid value of padding of preprocess_audio()")
+            sound = torch.cat([sound, pad_vec], dim=-1)
         else:
             sound = sound[:, :num_points]
 
     sound = sound.squeeze(0)  # (L,)
-    return sound
+    return sound.to(device)
 
 
 class StegoDataset(torch.utils.data.Dataset):
