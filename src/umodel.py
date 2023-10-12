@@ -22,7 +22,10 @@ from src.loader import preprocess_audio
 try:
     from utils.prompt_making import make_prompt
     from utils.generation import SAMPLE_RATE, generate_audio, preload_models
+
+    voice_clone_valid = True
 except:
+    voice_clone_valid = False
     print("\033[31mCannot Use Voice Cloning!\033[0m")
 
 
@@ -244,20 +247,17 @@ class Transform(torch.autograd.Function):
             wav = wav[:, :int(num_points * alpha / 10)]
         elif name == "RS":  # resample to make it longer
             alpha = torch.rand(1) * 4 + 1
-            wav = torchaudio.transforms.Resample(10000, int(10000 * alpha.item()))(wav)
+            RS_model = torchaudio.transforms.Resample(10000, int(10000 * alpha.item())).to(device)
+            wav = RS_model(wav)
+        # TODO: add noise
+        elif name == "NS":
+            noise = torch.normal(0, 1e-4, (wav.size(0), wav.size(1))).to(device)
+            wav += noise
         elif name == "VC":
-            try:
-                audio_prompt_path, transcript = data_dict["audio_prompt_path"], data_dict["transcript"]
-                text_prompt = data_dict["text_prompt"]
-            except:
-                raise ValueError(
-                    "Voice Cloning needs a data_dict whose keys are 'audio_prompt_path', 'transcript', 'text_prompt'")
+            audio_prompt_path, transcript = data_dict["audio_prompt_path"], data_dict["transcript"]
+            text_prompt = data_dict["text_prompt"]
 
-            preload_models()
-            if transcript is not None:
-                make_prompt(name="clone", audio_prompt_path=audio_prompt_path, transcript=transcript)
-            else:
-                make_prompt(name="clone", audio_prompt_path=audio_prompt_path)
+            make_prompt(name="clone", audio_prompt_path=audio_prompt_path, transcript=transcript)
 
             wav = generate_audio(text_prompt, prompt="clone")
             wav = torch.tensor(wav).unsqueeze(0).to(device)
@@ -278,6 +278,8 @@ class StegoUNet(nn.Module):
     def __init__(self, transform='cosine', stft_small=True, ft_container='mag', mp_encoder='single',
                  mp_decoder='double', mp_join='mean', permutation=False, embed='stretch', luma='luma',
                  num_points=63600, n_fft=1022, hop_length=400, mag=False):
+        assert mag == False
+        global voice_clone_valid
 
         super().__init__()
 
@@ -309,6 +311,10 @@ class StegoUNet(nn.Module):
                                  n_fft=self.n_fft, hop_length=self.hop_length, mag=self.mag)
         self.RN = RevealNet(self.mp_decoder, self.stft_small, self.embed, self.luma, num_points=self.num_points,
                             n_fft=self.n_fft, hop_length=self.hop_length, mag=self.mag)
+
+        # transform
+        if voice_clone_valid:
+            preload_models()
 
     def stft(self, data, return_complex=True):
         window = torch.hann_window(self.n_fft).to(data.device)
@@ -351,7 +357,9 @@ class StegoUNet(nn.Module):
 
         # transform
         # TODO stft won't give out the same spectogram
-        origin_ct_tf = Transform.apply(origin_ct_wav, self.num_points, "TC", None)
+        origin_ct_tf = Transform.apply(origin_ct_wav, self.num_points, "RS", {"num_points": self.num_points})
+        # origin_ct_tf = preprocess_audio(origin_ct_wav, self.num_points).unsqueeze(0)
+        # origin_ct_tf = origin_ct_wav
 
         origin_ct_fft_img = self.stft(origin_ct_tf)
         origin_ct_fft = torch.view_as_real(origin_ct_fft_img)
