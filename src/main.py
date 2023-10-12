@@ -41,7 +41,7 @@ def parse_keyword(keyword):
 parser = argparse.ArgumentParser()
 parser.add_argument('--beta',
                         type=float,
-                        default=0.4,
+                        default=0.5,
                         metavar='DOUBLE',
                         help='Beta hyperparameter'
                     )
@@ -95,14 +95,14 @@ parser.add_argument('--experiment',
                     )
 parser.add_argument('--summary',
                         type=str,
-                        default="Test_MagPhase_truncate",
+                        default="Test",
                         metavar='STRING',
                         help='Summary to be shown in wandb'
                     )
 parser.add_argument('--from_checkpoint',
-                        type=parse_keyword,
-                        default=False,
-                        metavar='BOOL',
+                        type=str,
+                        # default="1-Test_MagPhase/5-1-Test_MagPhase.pt",
+                        default="",
                         help='Use checkpoint listed by experiment number'
                     )
 parser.add_argument('--transform',
@@ -226,7 +226,8 @@ if __name__ == '__main__':
 
     if args.from_checkpoint:
         # Load checkpoint
-        checkpoint = torch.load(os.path.join(os.environ.get('OUT_PATH'),f'{args.experiment}-{args.summary}.pt'), map_location='cpu')
+        # checkpoint = torch.load(os.path.join(os.environ.get('OUT_PATH'),f'{args.experiment}-{args.summary}.pt'), map_location='cpu')
+        checkpoint = torch.load(os.path.join(os.environ.get('OUT_PATH'),args.from_checkpoint), map_location='cpu')
         if torch.cuda.device_count() > 1:
             model = nn.DataParallel(model)
         model.load_state_dict(checkpoint['state_dict'])

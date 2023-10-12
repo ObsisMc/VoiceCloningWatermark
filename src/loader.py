@@ -41,7 +41,7 @@ def preprocess_audio(audio: str | torch.Tensor, num_points: int = 64000, padding
             if padding == "zeros":
                 pad_vec = torch.zeros((sound.shape[0], num_points - L)).to(device)
             elif padding == "gaussian":
-                pad_vec = torch.randn(sound.shape[0], num_points - L).to(device)
+                pad_vec = torch.normal(0, 1e-4, (sound.shape[0], num_points - L)).to(device)
             else:
                 raise ValueError("Invalid value of padding of preprocess_audio()")
             sound = torch.cat([sound, pad_vec], dim=-1)

@@ -247,8 +247,7 @@ class Transform(torch.autograd.Function):
             wav = wav[:, :int(num_points * alpha / 10)]
         elif name == "RS":  # resample to make it longer
             alpha = torch.rand(1) * 4 + 1
-            RS_model = torchaudio.transforms.Resample(10000, int(10000 * alpha.item())).to(device)
-            wav = RS_model(wav)
+            wav = torchaudio.functional.resample(wav, num_points, int(num_points * alpha.item()))
         # TODO: add noise
         elif name == "NS":
             noise = torch.normal(0, 1e-4, (wav.size(0), wav.size(1))).to(device)
@@ -357,7 +356,7 @@ class StegoUNet(nn.Module):
 
         # transform
         # TODO stft won't give out the same spectogram
-        origin_ct_tf = Transform.apply(origin_ct_wav, self.num_points, "RS", {"num_points": self.num_points})
+        origin_ct_tf = Transform.apply(origin_ct_wav, self.num_points, "RS", None)
         # origin_ct_tf = preprocess_audio(origin_ct_wav, self.num_points).unsqueeze(0)
         # origin_ct_tf = origin_ct_wav
 

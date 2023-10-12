@@ -70,7 +70,7 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
     # Start training ...
     for epoch in range(epochs):
 
-        if prev_epoch != None and epoch < prev_epoch - 1: continue  # Checkpoint pass
+        # if prev_epoch != None and epoch < prev_epoch - 1: continue  # Checkpoint pass
 
         # Initialize training metrics storage
         train_loss, train_loss_cover, train_loss_secret, train_loss_spectrum, snr, psnr, ssim_secret, train_wav_loss = [], [], [], [], [], [], [], []
@@ -82,7 +82,7 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
         print(' Iter.     Time  Tr. Loss  Au. MSE   Im. WF  Spectr.  Au. SNR Im. PSNR Im. SSIM   Au. WF BER')
         for i, data in enumerate(tr_loader):
 
-            if prev_i != None and i < prev_i - 1: continue  # Checkpoint pass
+            # if prev_i != None and i < prev_i - 1: continue  # Checkpoint pass
 
             # Load data from the loader
             # (B,secret_len), (B,secret_len,), (B,L)  B=1
@@ -116,6 +116,7 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
             # else:
             #     wav_loss = l1wavLoss(original_wav.cpu().unsqueeze(0), container_wav.cpu().unsqueeze(0))
             # objective_loss = loss + lam * wav_loss
+            mseloss = nn.MSELoss()
             wav_loss = l1wavLoss(original_wav.cpu().unsqueeze(0), container_wav.cpu().unsqueeze(0))
             objective_loss = loss + lam * wav_loss
 
