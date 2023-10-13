@@ -149,6 +149,13 @@ def calc_ber(watermark_revealed, watermark_origin, threshold=0.5):
     ber_tensor = 1 - (watermark_decoded_binary == watermark_binary).to(torch.float32).mean()
     return ber_tensor
 
+def batch_calc_ber(watermark_revealed, watermark_origin, threshold=0.5):
+    watermark_decoded_binary = watermark_revealed >= threshold
+    watermark_binary = watermark_origin >= threshold
+    ber_tensor = 1 - (watermark_decoded_binary == watermark_binary).to(torch.float32).mean(dim=-1).mean(dim=0)
+
+    return ber_tensor
+
 
 def to_equal_length(original, signal_watermarked):
     if original.shape != signal_watermarked.shape:

@@ -13,7 +13,7 @@ import wandb
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from src.losses import ssim, SNR, PSNR, StegoLoss, calc_ber, signal_noise_ratio
+from src.losses import ssim, SNR, PSNR, StegoLoss, calc_ber, signal_noise_ratio, batch_signal_noise_ratio, batch_calc_ber
 from src.visualization import viz2paper, viz4seq
 
 
@@ -137,8 +137,8 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
             #     transform_constructor=None if transform == 'cosine' else stft,
             #     ft_container=ft_container,
             # )
-            snr_audio = signal_noise_ratio(covers.cpu().detach().numpy(), container_wav.cpu().detach().numpy())
-            ber = calc_ber(revealed, secrets)
+            snr_audio = batch_signal_noise_ratio(covers, container_wav)
+            ber = batch_calc_ber(revealed, secrets)
             psnr_image = torch.tensor(0.0)  # PSNR(secrets, revealed)
             ssim_image = torch.tensor(0.0)  # ssim(secrets, revealed)
 
@@ -329,8 +329,8 @@ def validate(model, vd_loader, beta, val_size=50, transform='cosine', transform_
             # Compute audio and image metrics
             # if (transform != 'fourier') or (ft_container != 'magphase'):
             #     containers_phase = None  # Otherwise it's the phase container
-            vd_snr_audio = signal_noise_ratio(covers.cpu().detach().numpy(), container_wav.cpu().detach().numpy())
-            ber = calc_ber(revealed, secrets)
+            vd_snr_audio = batch_signal_noise_ratio(covers, container_wav)
+            ber = batch_calc_ber(revealed, secrets)
             vd_psnr_image = torch.tensor(0.0)  # PSNR(secrets, revealed)
             ssim_image = torch.tensor(0.0)  # ssim(secrets, revealed)
 
