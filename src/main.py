@@ -41,7 +41,7 @@ def parse_keyword(keyword):
 parser = argparse.ArgumentParser()
 parser.add_argument('--beta',
                         type=float,
-                        default=0.5,
+                        default=1,
                         metavar='DOUBLE',
                         help='Beta hyperparameter'
                     )
@@ -83,7 +83,7 @@ parser.add_argument('--num_epochs',
                     )
 parser.add_argument('--batch_size',
                         type=int,
-                        default=1,
+                        default=10,
                         metavar='INT',
                         help='Size of the data batch'
                     )
@@ -95,7 +95,7 @@ parser.add_argument('--experiment',
                     )
 parser.add_argument('--summary',
                         type=str,
-                        default="Test",
+                        default="Test_Test",
                         metavar='STRING',
                         help='Summary to be shown in wandb'
                     )
@@ -169,11 +169,11 @@ parser.add_argument('--luma',
 # need to design to fit U-net -> fft to (512,160,2)
 parser.add_argument('--num_points',
                     type=int,
-                    default=64000 - 400,
+                    default=16000,
                     help="the length model can handle")
 parser.add_argument('--n_fft',
                     type=int,
-                    default=1022)
+                    default=1000)
 parser.add_argument('--hop_length',
                     type=int,
                     default=400)
@@ -181,6 +181,9 @@ parser.add_argument("--mag",
                     type=bool,
                     default=False,
                     help="only use magnitude")
+parser.add_argument('--num_layers',
+                    type=int,
+                    default=2)
 
 
 if __name__ == '__main__':
@@ -221,7 +224,8 @@ if __name__ == '__main__':
         num_points=args.num_points,
         n_fft=args.n_fft,
         hop_length=args.hop_length,
-        mag=args.mag
+        mag=args.mag,
+        num_layers=args.num_layers
     )
 
     if args.from_checkpoint:

@@ -18,6 +18,8 @@ from torch import utils
 import torchaudio
 import torch.nn.functional as F
 from src.loader import preprocess_audio
+from src.rrdb_denselayer import ResidualDenseBlock_out
+from src.hinet import Hinet
 
 try:
     from utils.prompt_making import make_prompt
@@ -128,14 +130,15 @@ class PrepHidingNet(nn.Module):
         self.mag = mag
 
         self.fc = nn.Linear(self._secrete_len, self.num_points)  # TODO: may be optimized
-        self.im_encoder_layers = nn.ModuleList([
-            Down(1 + (not self.mag), 64),
-            Down(64, 64 * 2)
-        ])
-        self.im_decoder_layers = nn.ModuleList([
-            Up(64 * 2, 64),
-            Up(64, 1 + (not self.mag))
-        ])
+        # self.im_encoder_layers = nn.ModuleList([
+        #     Down(1 + (not self.mag), 64),
+        #     Down(64, 64 * 2)
+        # ])
+        # self.im_decoder_layers = nn.ModuleList([
+        #     Up(64 * 2, 64),
+        #     Up(64, 1 + (not self.mag))
+        # ])
+        self.subnet = ResidualDenseBlock_out(2, 2)
 
     def stft(self, data):
         window = torch.hann_window(self.n_fft).to(data.device)
@@ -153,18 +156,20 @@ class PrepHidingNet(nn.Module):
             seq_fft_real = mag
         seq_fft_real = seq_fft_real.permute(0, 3, 1, 2)  # (B,C,N,T)
 
-        seq_wavs_down = [seq_fft_real]
-        # Encoder part of the UNet
-        for enc_layer_idx, enc_layer in enumerate(self.im_encoder_layers):
-            seq_wavs_down.append(enc_layer(seq_wavs_down[-1]))
+        # seq_wavs_down = [seq_fft_real]
+        # # Encoder part of the UNet
+        # for enc_layer_idx, enc_layer in enumerate(self.im_encoder_layers):
+        #     seq_wavs_down.append(enc_layer(seq_wavs_down[-1]))
+        #
+        # seq_wavs_up = [seq_wavs_down.pop()]
+        #
+        # # Decoder part of the UNet
+        # for dec_layer_idx, dec_layer in enumerate(self.im_decoder_layers):
+        #     seq_wavs_up.append(dec_layer(seq_wavs_up[-1], seq_wavs_down[-1 - dec_layer_idx], None))
 
-        seq_wavs_up = [seq_wavs_down.pop()]
+        seq_fft_ret = self.subnet(seq_fft_real)
 
-        # Decoder part of the UNet
-        for dec_layer_idx, dec_layer in enumerate(self.im_decoder_layers):
-            seq_wavs_up.append(dec_layer(seq_wavs_up[-1], seq_wavs_down[-1 - dec_layer_idx], None))
-
-        return seq_wavs_up[-1].permute(0, 2, 3, 1), phase  # (B,N,T,C), (B,N,T,1)
+        return seq_fft_ret.permute(0, 2, 3, 1), phase  # (B,N,T,C), (B,N,T,1)
 
 
 class RevealNet(nn.Module):
@@ -186,15 +191,15 @@ class RevealNet(nn.Module):
         self.hop_length = hop_length
         self.mag = mag
 
-        self.im_encoder_layers = nn.ModuleList([
-            Down(1 + (not self.mag), 64),
-            Down(64, 64 * 2)
-        ])
-        self.im_decoder_layers = nn.ModuleList([
-            Up(64 * 2, 64),
-            Up(64, 1 + (not self.mag))
-        ])
-
+        # self.im_encoder_layers = nn.ModuleList([
+        #     Down(1 + (not self.mag), 64),
+        #     Down(64, 64 * 2)
+        # ])
+        # self.im_decoder_layers = nn.ModuleList([
+        #     Up(64 * 2, 64),
+        #     Up(64, 1 + (not self.mag))
+        # ])
+        self.subnet = ResidualDenseBlock_out(2, 2)
         self.fc = nn.Linear(self.num_points, secrete_len)
 
     def istft(self, signal_wmd_fft):
@@ -204,22 +209,24 @@ class RevealNet(nn.Module):
 
     def forward(self, ct, phase=None):
         ct = ct.permute(0, 3, 1, 2)  # (B,C,N,T)
-        ct_down = [ct]
+        # ct_down = [ct]
+        #
+        # # Encoder part of the UNet
+        # for enc_layer_idx, enc_layer in enumerate(self.im_encoder_layers):
+        #     ct_down.append(enc_layer(ct_down[-1]))
+        #
+        # ct_up = [ct_down.pop(-1)]
+        #
+        # # Decoder part of the UNet
+        # for dec_layer_idx, dec_layer in enumerate(self.im_decoder_layers):
+        #     ct_up.append(
+        #         dec_layer(ct_up[-1],
+        #                   ct_down[-1 - dec_layer_idx])
+        #     )
+        #
+        # revealed = ct_up[-1]
 
-        # Encoder part of the UNet
-        for enc_layer_idx, enc_layer in enumerate(self.im_encoder_layers):
-            ct_down.append(enc_layer(ct_down[-1]))
-
-        ct_up = [ct_down.pop(-1)]
-
-        # Decoder part of the UNet
-        for dec_layer_idx, dec_layer in enumerate(self.im_decoder_layers):
-            ct_up.append(
-                dec_layer(ct_up[-1],
-                          ct_down[-1 - dec_layer_idx])
-            )
-
-        revealed = ct_up[-1]
+        revealed = self.subnet(ct)
 
         # obsismc: sequence
         revealed = revealed.permute(0, 2, 3, 1).contiguous()  # (B,N,T,C)
@@ -276,8 +283,8 @@ class Transform(torch.autograd.Function):
 class StegoUNet(nn.Module):
     def __init__(self, transform='cosine', stft_small=True, ft_container='mag', mp_encoder='single',
                  mp_decoder='double', mp_join='mean', permutation=False, embed='stretch', luma='luma',
-                 num_points=63600, n_fft=1022, hop_length=400, mag=False):
-        assert mag == False
+                 num_points=63600, n_fft=1022, hop_length=400, mag=False, num_layers=1):
+        assert mag == False and num_layers > 0
         global voice_clone_valid
 
         super().__init__()
@@ -296,6 +303,7 @@ class StegoUNet(nn.Module):
         self.n_fft = n_fft
         self.hop_length = hop_length
         self.mag = mag
+        self.num_layers = num_layers
 
         if self.ft_container == 'magphase' and self.embed != 'stretch':
             raise Exception('Mag+phase does not work with embeddings other than stretch')
@@ -308,8 +316,17 @@ class StegoUNet(nn.Module):
         # Sub-networks
         self.PHN = PrepHidingNet(self.transform, self.stft_small, self.embed, num_points=self.num_points,
                                  n_fft=self.n_fft, hop_length=self.hop_length, mag=self.mag)
+        self.encode_subnets = nn.ModuleList([ResidualDenseBlock_out(2, 2) for _ in range(self.num_layers)])
+
+        self.decode_subnets = nn.ModuleList([ResidualDenseBlock_out(2, 2) for _ in range(self.num_layers)])
         self.RN = RevealNet(self.mp_decoder, self.stft_small, self.embed, self.luma, num_points=self.num_points,
                             n_fft=self.n_fft, hop_length=self.hop_length, mag=self.mag)
+
+        # wavmark
+        self.watermark_fc = nn.Linear(32, self.num_points)
+        self.hinet = Hinet(num_layers=self.num_layers)
+        self.hinet_r = Hinet(num_layers=self.num_layers)
+        self.watermark_fc_back = nn.Linear(self.num_points, 32)
 
         # transform
         if voice_clone_valid:
@@ -327,81 +344,121 @@ class StegoUNet(nn.Module):
                            return_complex=False)
 
     def forward(self, secret, cover, cover_phase=None):
-        # cover_phase is not None if and only if using mag+phase
-        # If using the phase only, 'cover' is actually the phase!
-        # obsismc: image secret (B,C,256,256), cover (B,1024,512)
-        # obsismc: sequence secret (B,32), cover (B,1,1024,512)
-        assert not ((self.transform == 'fourier' and self.ft_container == 'magphase') and cover_phase is None)
-        assert not ((self.transform == 'fourier' and self.ft_container != 'magphase') and cover_phase is not None)
+        # # Encode the image using PHN
+        # hidden_signal, hidden_phase = self.PHN(secret)  # (B,N,T,C)
+        #
+        # # Residual connection
+        # # Also keep a copy of the unpermuted containers to compute the loss
+        # cover_fft_img = self.stft(cover)
+        # cover_fft_real = torch.view_as_real(cover_fft_img)  # (B,N,T,2)
+        # if self.mag:
+        #     mag, phase = spec2magphase(cover_fft_real)
+        #     cover_fft_real = mag
+        # hidden_signal = hidden_signal.permute(0, 3, 1, 2)
+        # # container_fft = cover_fft_real + hidden_signal  # (B,N,T,C)
+        #
+        # # deep encoding
+        # container_fft = cover_fft_real.permute(0, 3, 1, 2)  # (B,C,N,T)
+        # for encode_subnet in self.encode_subnets:
+        #     container_fft = encode_subnet(container_fft + hidden_signal)  # residual
+        # container_fft = container_fft.permute(0, 2, 3, 1)  # (B,N,T,C)
+        #
+        # return_ct_fft = container_fft  # (B,N,T,C)
+        # if self.mag:
+        #     spec = magphase2spec(container_fft, phase)
+        #     spec_img = torch.view_as_complex(spec.contiguous())
+        # else:
+        #     spec_img = torch.view_as_complex(container_fft.contiguous())
+        # watermark_ct_wav = self.istft(spec_img)  # (B,L)
+        #
+        # # transform
+        # # TODO stft won't give out the same spectogram
+        # trans_ct_wav = Transform.apply(watermark_ct_wav, self.num_points, "ID", None)
+        # # trans_ct_wav = preprocess_audio(watermark_ct_wav, self.num_points).unsqueeze(0)
+        # # trans_ct_wav = watermark_ct_wav
+        #
+        # trans_ct_fft = self.stft(trans_ct_wav)
+        # trans_ct_fft_real = torch.view_as_real(trans_ct_fft)
+        # if self.mag:
+        #     mag_tf, phase_tf = spec2magphase(trans_ct_fft_real)
+        #     trans_ct_fft_real = mag_tf
+        #
+        # # deep decoding
+        # trans_ct_fft_real = trans_ct_fft_real.permute(0, 3, 1, 2)  # (B,C,N,T)
+        # residual_fft_real = trans_ct_fft_real
+        # for decode_subnet in self.decode_subnets:
+        #     residual_fft_real = residual_fft_real - decode_subnet(trans_ct_fft_real)
+        # residual_fft_real = residual_fft_real.permute(0, 2, 3, 1)  # (B,N,T,C)
+        #
+        # # decode
+        # revealed = self.RN(residual_fft_real, phase=None if not self.mag else hidden_phase)  # (B,secret_len)
 
-        # Encode the image using PHN
-        hidden_signal, hidden_phase = self.PHN(secret)  # (B,N,T,C)
+        # wavmark
 
-        # Residual connection
-        # Also keep a copy of the unpermuted containers to compute the loss
-        cover_fft_img = self.stft(cover)
-        cover_fft_real = torch.view_as_real(cover_fft_img)  # (B,N,T,2)
-        if self.mag:
-            mag, phase = spec2magphase(cover_fft_real)
-            cover_fft_real = mag
-        container_fft = cover_fft_real + hidden_signal  # (B,N,T,C)
+        ## encode
+        cover_fft = self.stft(cover)
+        cover_fft_real = torch.view_as_real(cover_fft)
+        # (batch,freq_bins,time_frames,2)
 
-        return_ct_fft = container_fft  # (B,N,T,C)
-        if self.mag:
-            spec = magphase2spec(container_fft, phase)
-            spec_img = torch.view_as_complex(spec.contiguous())
+        secret_expand = self.watermark_fc(secret)
+        secret_fft = self.stft(secret_expand)
+        secret_fft_real = torch.view_as_real(secret_fft)
+
+        signal_wmd_fft_real, msg_remain = self.enc_dec(cover_fft_real, secret_fft_real, rev=False)
+        # (batch,freq_bins,time_frames,2)
+        signal_wmd_fft = torch.view_as_complex(signal_wmd_fft_real.contiguous())
+        watermark_ct_wav = self.istft(signal_wmd_fft)
+
+        ## transform
+        transform_ct_wav = watermark_ct_wav
+
+        ## decode
+        signal_fft = self.stft(transform_ct_wav)
+        sign_fft_real = torch.view_as_real(signal_fft)
+        watermark_fft_real = sign_fft_real  # obsismc: different from what the paper says
+        _, message_restored_fft_real = self.enc_dec(sign_fft_real, watermark_fft_real, rev=True)
+        message_restored_fft = torch.view_as_complex(message_restored_fft_real.contiguous())
+        message_restored_expanded = self.istft(message_restored_fft)
+        revealed = self.watermark_fc_back(message_restored_expanded).clamp(-1, 1)
+
+        return_ct_fft = cover_fft_real
+
+        return cover_fft_real, return_ct_fft, watermark_ct_wav, revealed
+
+    def enc_dec(self, signal, watermark, rev):
+        signal = signal.permute(0, 3, 2, 1)
+        # [4, 2, 41, 501]
+        watermark = watermark.permute(0, 3, 2, 1)
+        if not rev:
+            signal2, watermark2 = self.hinet(signal, watermark, rev)
         else:
-            spec_img = torch.view_as_complex(container_fft.contiguous())
-        origin_ct_wav = self.istft(spec_img)  # (B,L)
-
-        # transform
-        # TODO stft won't give out the same spectogram
-        origin_ct_tf = Transform.apply(origin_ct_wav, self.num_points, "RS", None)
-        # origin_ct_tf = preprocess_audio(origin_ct_wav, self.num_points).unsqueeze(0)
-        # origin_ct_tf = origin_ct_wav
-
-        origin_ct_fft_img = self.stft(origin_ct_tf)
-        origin_ct_fft = torch.view_as_real(origin_ct_fft_img)
-        if self.mag:
-            mag_tf, phase_tf = spec2magphase(origin_ct_fft)
-            origin_ct_fft = mag_tf
-
-        # decode
-        revealed = self.RN(origin_ct_fft, phase=None if not self.mag else hidden_phase)  # (B,secret_len)
-        return cover_fft_real, return_ct_fft, origin_ct_wav, revealed
+            signal2, watermark2 = self.hinet_r(signal, watermark, rev)
+        return signal2.permute(0, 3, 2, 1), watermark2.permute(0, 3, 2, 1)
 
     def encode(self, secret, cover):
-        # Encode the image using PHN
-        hidden_signal, hidden_phase = self.PHN(secret)  # (B,N,T,C)
+        cover_fft = self.stft(cover)
+        cover_fft_real = torch.view_as_real(cover_fft)
+        # (batch,freq_bins,time_frames,2)
 
-        # Residual connection
-        # Also keep a copy of the unpermuted containers to compute the loss
-        cover_fft_img = self.stft(cover)
-        cover_fft_real = torch.view_as_real(cover_fft_img)  # (B,N,T,2)
-        if self.mag:
-            mag, phase = spec2magphase(cover_fft_real)
-            cover_fft_real = mag
-        container_fft = cover_fft_real + hidden_signal  # (B,N,T,C)
+        secret_expand = self.watermark_fc(secret)
+        secret_fft = self.stft(secret_expand)
+        secret_fft_real = torch.view_as_real(secret_fft)
 
-        if self.mag:
-            spec = magphase2spec(container_fft, phase)
-            spec_img = torch.view_as_complex(spec.contiguous())
-        else:
-            spec_img = torch.view_as_complex(container_fft.contiguous())
-        container_wav = self.istft(spec_img)  # (B,L)
-        return container_wav, hidden_phase
+        signal_wmd_fft_real, msg_remain = self.enc_dec(cover_fft_real, secret_fft_real, rev=False)
+        # (batch,freq_bins,time_frames,2)
+        signal_wmd_fft = torch.view_as_complex(signal_wmd_fft_real.contiguous())
+        watermark_ct_wav = self.istft(signal_wmd_fft)
+        return watermark_ct_wav
 
-    def decode(self, audio, hidden_phase=None):
-        audio = preprocess_audio(audio, self.num_points).unsqueeze(0)
-        audio_stft_img = self.stft(audio)
-        audio_stft_real = torch.view_as_real(audio_stft_img)
-        if self.mag:
-            mag_tf, phase_tf = spec2magphase(audio_stft_real)
-            audio_stft_real = mag_tf
-
-        # decode
-        secret = self.RN(audio_stft_real, phase=None if not self.mag else hidden_phase)  # (B,secret_len)
-        return secret
+    def decode(self, audio):
+        signal_fft = self.stft(audio)
+        sign_fft_real = torch.view_as_real(signal_fft)
+        watermark_fft_real = sign_fft_real  # obsismc: different from what the paper says
+        _, message_restored_fft_real = self.enc_dec(sign_fft_real, watermark_fft_real, rev=True)
+        message_restored_fft = torch.view_as_complex(message_restored_fft_real.contiguous())
+        message_restored_expanded = self.istft(message_restored_fft)
+        revealed = self.watermark_fc_back(message_restored_expanded).clamp(-1, 1)
+        return revealed
 
 
 class VoiceCloner:

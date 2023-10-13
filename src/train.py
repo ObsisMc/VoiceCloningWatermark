@@ -60,6 +60,8 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
 
     ini = time.time()
     best_loss = np.inf
+    best_snr = - np.inf
+    ber_threshold = 1 / 32
 
     # Initialize waveform loss constructor
     if dtw:
@@ -94,18 +96,17 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
             # Forward through the model
             # (B,N,T,C), (B,N,T,C), (B,L), (B,secret_len)
             cover_fft, containers_fft, container_wav, revealed = model(secrets, covers)
-
             # Compute the loss
-            cover_fft = cover_fft.squeeze(0)
-            containers_fft = containers_fft.squeeze(0)
-            original_wav = covers.squeeze(0)
-            container_wav = container_wav.squeeze(0)
+            # cover_fft = cover_fft.squeeze(0)
+            # containers_fft = containers_fft.squeeze(0)
+            # original_wav = covers.squeeze(0)
+            # container_wav = container_wav.squeeze(0)
             # container_2x = stft.transform(container_wav)[0].unsqueeze(1)  # TODO: obsismc: why have this?
             # TODO: what is loss_spectrum
             # print(
-                # f"before loss: cover_fft shape: {cover_fft.shape}, containters_fft shape: {containers_fft.shape}, "
-                # f"secrets shape:{secrets.shape}, revealed shape:{revealed.shape}, original_wav: {original_wav.shape},"
-                # f"container_wav: {container_wav.shape}")
+            # f"before loss: cover_fft shape: {cover_fft.shape}, containters_fft shape: {containers_fft.shape}, "
+            # f"secrets shape:{secrets.shape}, revealed shape:{revealed.shape}, original_wav: {original_wav.shape},"
+            # f"container_wav: {container_wav.shape}")
             loss, loss_cover, loss_secret, loss_spectrum = StegoLoss(secrets, cover_fft, containers_fft, None,
                                                                      revealed, beta)
 
@@ -117,7 +118,7 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
             #     wav_loss = l1wavLoss(original_wav.cpu().unsqueeze(0), container_wav.cpu().unsqueeze(0))
             # objective_loss = loss + lam * wav_loss
             mseloss = nn.MSELoss()
-            wav_loss = l1wavLoss(original_wav.cpu().unsqueeze(0), container_wav.cpu().unsqueeze(0))
+            wav_loss = l1wavLoss(covers, container_wav)
             objective_loss = loss + lam * wav_loss
 
             with torch.autograd.set_detect_anomaly(True):
@@ -136,7 +137,7 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
             #     transform_constructor=None if transform == 'cosine' else stft,
             #     ft_container=ft_container,
             # )
-            snr_audio = signal_noise_ratio(original_wav.cpu().detach().numpy(), container_wav.cpu().detach().numpy())
+            snr_audio = signal_noise_ratio(covers.cpu().detach().numpy(), container_wav.cpu().detach().numpy())
             ber = calc_ber(revealed, secrets)
             psnr_image = torch.tensor(0.0)  # PSNR(secrets, revealed)
             ssim_image = torch.tensor(0.0)  # ssim(secrets, revealed)
@@ -197,7 +198,10 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
                 vd_ssim.append(avg_valid_ssim)
                 vd_wav.append(avg_valid_wav)
 
-                is_best = bool(avg_valid_loss < best_loss)
+                if ber_threshold < avg_valid_ber:
+                    is_best = bool(avg_valid_loss < best_loss)
+                else:
+                    is_best = bool(avg_valid_snr > best_snr)
                 # Save checkpoint if is a new best
                 save_checkpoint({
                     'epoch': epoch + 1,
@@ -250,8 +254,12 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
             'avg_tr_WF': avg_wav_loss
         })
 
-        is_best = bool(avg_train_loss < best_loss)
+        if ber_threshold < avg_ber:
+            is_best = bool(avg_train_loss < best_loss)
+        else:
+            is_best = bool(avg_snr > best_snr)
         best_loss = min(avg_train_loss, best_loss)
+        best_snr = max(avg_snr, best_snr)
 
         # Save checkpoint if is a new best
         save_checkpoint({
@@ -310,10 +318,10 @@ def validate(model, vd_loader, beta, val_size=50, transform='cosine', transform_
                 wandb.log({f"Revelation at epoch {epoch}, vd iteration {tr_i}": fig})
 
             # Compute the loss
-            cover_fft = cover_fft.squeeze(0)
-            containers_fft = containers_fft.squeeze(0)
-            original_wav = covers.squeeze(0)
-            container_wav = container_wav.squeeze(0)
+            # cover_fft = cover_fft.squeeze(0)
+            # containers_fft = containers_fft.squeeze(0)
+            # original_wav = covers.squeeze(0)
+            # container_wav = container_wav.squeeze(0)
             # container_2x = transform_constructor.transform(container_wav)[0].unsqueeze(1)
             loss, loss_cover, loss_secret, loss_spectrum = StegoLoss(secrets, cover_fft, containers_fft, None,
                                                                      revealed, beta)
@@ -321,7 +329,7 @@ def validate(model, vd_loader, beta, val_size=50, transform='cosine', transform_
             # Compute audio and image metrics
             # if (transform != 'fourier') or (ft_container != 'magphase'):
             #     containers_phase = None  # Otherwise it's the phase container
-            vd_snr_audio = signal_noise_ratio(original_wav.cpu().detach().numpy(), container_wav.cpu().detach().numpy())
+            vd_snr_audio = signal_noise_ratio(covers.cpu().detach().numpy(), container_wav.cpu().detach().numpy())
             ber = calc_ber(revealed, secrets)
             vd_psnr_image = torch.tensor(0.0)  # PSNR(secrets, revealed)
             ssim_image = torch.tensor(0.0)  # ssim(secrets, revealed)
@@ -332,7 +340,7 @@ def validate(model, vd_loader, beta, val_size=50, transform='cosine', transform_
                 #                                window=torch.hamming_window)
                 # elif transform == 'fourier':
                 #     original_wav = transform_constructor.inverse(covers.squeeze(1), phase.squeeze(1))
-                wav_loss = wav_criterion(original_wav.cpu().unsqueeze(0), container_wav.cpu().unsqueeze(0))
+                wav_loss = wav_criterion(covers, container_wav)
 
             valid_loss.append(loss.detach().item())
             valid_loss_cover.append(loss_cover.detach().item())
