@@ -100,9 +100,9 @@ parser.add_argument('--summary',
                         help='Summary to be shown in wandb'
                     )
 parser.add_argument('--from_checkpoint',
-                        type=str,
-                        # default="1-Test_MagPhase/5-1-Test_MagPhase.pt",
-                        default="",
+                        metavar='BOOL',
+                        type=parse_keyword,
+                        default=False,
                         help='Use checkpoint listed by experiment number'
                     )
 parser.add_argument('--transform',
