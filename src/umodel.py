@@ -271,7 +271,10 @@ class Transform(torch.autograd.Function):
             raise ValueError("Invalid transform name")
 
         ctx.save_for_backward(wav, torch.tensor(wav_l))
-        wav = preprocess_audio(wav, num_points).unsqueeze(0)
+        if wav.shape[1] < wav_l:
+            wav = F.pad(wav, (0, wav_l - wav.shape[1]), "constant", 0)
+        if wav.shape[1] > wav_l:
+            wav = wav[:, :wav_l]
         return wav
 
     @staticmethod
@@ -328,6 +331,9 @@ class StegoUNet(nn.Module):
         self.hinet_r = Hinet(num_layers=self.num_layers)
         self.watermark_fc_back = nn.Linear(self.num_points, 32)
 
+        # alignment
+        self.align = AlignmentLayer(self.num_points)
+
         # transform
         if voice_clone_valid:
             preload_models()
@@ -343,56 +349,7 @@ class StegoUNet(nn.Module):
         return torch.istft(signal_wmd_fft, n_fft=self.n_fft, hop_length=self.hop_length, window=window,
                            return_complex=False)
 
-    def forward(self, secret, cover, cover_phase=None):
-        # # Encode the image using PHN
-        # hidden_signal, hidden_phase = self.PHN(secret)  # (B,N,T,C)
-        #
-        # # Residual connection
-        # # Also keep a copy of the unpermuted containers to compute the loss
-        # cover_fft_img = self.stft(cover)
-        # cover_fft_real = torch.view_as_real(cover_fft_img)  # (B,N,T,2)
-        # if self.mag:
-        #     mag, phase = spec2magphase(cover_fft_real)
-        #     cover_fft_real = mag
-        # hidden_signal = hidden_signal.permute(0, 3, 1, 2)
-        # # container_fft = cover_fft_real + hidden_signal  # (B,N,T,C)
-        #
-        # # deep encoding
-        # container_fft = cover_fft_real.permute(0, 3, 1, 2)  # (B,C,N,T)
-        # for encode_subnet in self.encode_subnets:
-        #     container_fft = encode_subnet(container_fft + hidden_signal)  # residual
-        # container_fft = container_fft.permute(0, 2, 3, 1)  # (B,N,T,C)
-        #
-        # return_ct_fft = container_fft  # (B,N,T,C)
-        # if self.mag:
-        #     spec = magphase2spec(container_fft, phase)
-        #     spec_img = torch.view_as_complex(spec.contiguous())
-        # else:
-        #     spec_img = torch.view_as_complex(container_fft.contiguous())
-        # watermark_ct_wav = self.istft(spec_img)  # (B,L)
-        #
-        # # transform
-        # # TODO stft won't give out the same spectogram
-        # trans_ct_wav = Transform.apply(watermark_ct_wav, self.num_points, "ID", None)
-        # # trans_ct_wav = preprocess_audio(watermark_ct_wav, self.num_points).unsqueeze(0)
-        # # trans_ct_wav = watermark_ct_wav
-        #
-        # trans_ct_fft = self.stft(trans_ct_wav)
-        # trans_ct_fft_real = torch.view_as_real(trans_ct_fft)
-        # if self.mag:
-        #     mag_tf, phase_tf = spec2magphase(trans_ct_fft_real)
-        #     trans_ct_fft_real = mag_tf
-        #
-        # # deep decoding
-        # trans_ct_fft_real = trans_ct_fft_real.permute(0, 3, 1, 2)  # (B,C,N,T)
-        # residual_fft_real = trans_ct_fft_real
-        # for decode_subnet in self.decode_subnets:
-        #     residual_fft_real = residual_fft_real - decode_subnet(trans_ct_fft_real)
-        # residual_fft_real = residual_fft_real.permute(0, 2, 3, 1)  # (B,N,T,C)
-        #
-        # # decode
-        # revealed = self.RN(residual_fft_real, phase=None if not self.mag else hidden_phase)  # (B,secret_len)
-
+    def forward(self, secret, cover):
         # wavmark
 
         ## encode
@@ -410,7 +367,11 @@ class StegoUNet(nn.Module):
         watermark_ct_wav = self.istft(signal_wmd_fft)
 
         ## transform
-        transform_ct_wav = watermark_ct_wav
+        # transform_ct_wav = watermark_ct_wav
+        transform_ct_wav = Transform.apply(watermark_ct_wav, self.num_points, "NS", None)
+
+        ## length alignment  TODO: handle unfixed length
+        # transform_ct_wav = self.align(transform_ct_wav)
 
         ## decode
         signal_fft = self.stft(transform_ct_wav)
@@ -419,7 +380,8 @@ class StegoUNet(nn.Module):
         _, message_restored_fft_real = self.enc_dec(sign_fft_real, watermark_fft_real, rev=True)
         message_restored_fft = torch.view_as_complex(message_restored_fft_real.contiguous())
         message_restored_expanded = self.istft(message_restored_fft)
-        revealed = self.watermark_fc_back(message_restored_expanded).clamp(-1, 1)
+        revealed = self.watermark_fc_back(message_restored_expanded)
+        revealed = torch.sigmoid(revealed)
 
         return_ct_fft = cover_fft_real
 
@@ -459,6 +421,33 @@ class StegoUNet(nn.Module):
         message_restored_expanded = self.istft(message_restored_fft)
         revealed = self.watermark_fc_back(message_restored_expanded).clamp(-1, 1)
         return revealed
+
+
+class AlignmentLayer(nn.Module):
+    def __init__(self, num_points):
+        super().__init__()
+        self.num_points = num_points
+
+        self.avg = nn.AdaptiveAvgPool1d(self.num_points)
+        self.mx = nn.AdaptiveMaxPool1d(self.num_points)
+        self.conv = nn.Conv1d(3, 1, 3, 1, 1)
+        # self.conv1 = nn.Conv1d(3, 16, 3, 1, 1)
+        # self.conv2 = nn.Conv1d(3 + 16, 1, 3, 1, 1)
+        # self.conv3 = nn.Conv1d(3 + 2 * 16, 1, 3, 1, 1)
+        self.act = nn.LeakyReLU()
+
+    def forward(self, x):
+        B, L = x.size()
+
+        x_avg = self.avg(x)
+        x_mx = self.mx(x)
+        x = torch.stack([x[:, :self.num_points], x_avg, x_mx], dim=1)
+        x = self.conv(x)
+        # x1 = self.act(self.conv1(x))
+        # x2 = self.conv2(torch.cat([x, x1], dim=1))
+        # x3 = self.conv3(torch.cat([x, x1, x2], dim=1))
+        x = x.squeeze(1)
+        return x
 
 
 class VoiceCloner:
