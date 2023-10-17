@@ -42,7 +42,7 @@ def build_training_dataset(num_points, output_dir, base_n, demo=True):
             save_sample(os.path.join(output_dir, str(n)), wav_slice[None, ...], sr, text_slice)
             n += 1
 
-        if remain_slice / num_points > 1.5:
+        if remain_slice / num_points > 0.5:
             wav_slice = audio[-remain_slice:]
             text_slice = whisper_m.transcribe(wav_slice)["text"]
             save_sample(os.path.join(output_dir, str(n)), wav_slice[None, ...], sr, text_slice)
@@ -54,6 +54,6 @@ def build_training_dataset(num_points, output_dir, base_n, demo=True):
 
 
 if __name__ == "__main__":
-    num_points = 72000
+    num_points = 48000
     save_root = "YOUR_PATH"
     build_training_dataset(num_points, save_root, base_n=0, demo=False)
