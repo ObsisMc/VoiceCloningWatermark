@@ -21,14 +21,8 @@ from src.loader import preprocess_audio
 from src.rrdb_denselayer import ResidualDenseBlock_out
 from src.hinet import Hinet
 
-try:
-    from utils.prompt_making import make_prompt
-    from utils.generation import SAMPLE_RATE, generate_audio, preload_models
-
-    voice_clone_valid = True
-except:
-    voice_clone_valid = False
-    print("\033[31mCannot Use Voice Cloning!\033[0m")
+from utils.prompt_making import make_prompt_train, make_prompt
+from utils.generation import SAMPLE_RATE, generate_audio_train, preload_models, generate_audio
 
 
 def stft(self, data):
@@ -260,12 +254,17 @@ class Transform(torch.autograd.Function):
             noise = torch.normal(0, 1e-4, (wav.size(0), wav.size(1))).to(device)
             wav += noise
         elif name == "VC":
-            audio_prompt_path, transcript = data_dict["audio_prompt_path"], data_dict["transcript"]
-            text_prompt = data_dict["text_prompt"]
+            sr, transcript, text_prompt = data_dict["sample_rate"], data_dict["transcript"], data_dict["text_prompt"]
 
-            make_prompt(name="clone", audio_prompt_path=audio_prompt_path, transcript=transcript)
+            with torch.no_grad():
+                audio_tokens, text_tokens, lang_pr = make_prompt_train(name="clone",
+                                                                       audio_prompt=wav,
+                                                                       sr=sr,
+                                                                       transcript=transcript)
+                wav = generate_audio_train(text_prompt,
+                                           audio_tokens=audio_tokens,
+                                           text_tokens=text_tokens, lang_pr=lang_pr)
 
-            wav = generate_audio(text_prompt, prompt="clone")
             wav = torch.tensor(wav).unsqueeze(0).to(device)
         else:
             raise ValueError("Invalid transform name")
@@ -288,7 +287,6 @@ class StegoUNet(nn.Module):
                  mp_decoder='double', mp_join='mean', permutation=False, embed='stretch', luma='luma',
                  num_points=63600, n_fft=1022, hop_length=400, mag=False, num_layers=1):
         assert mag == False and num_layers > 0
-        global voice_clone_valid
 
         super().__init__()
 
@@ -307,6 +305,7 @@ class StegoUNet(nn.Module):
         self.hop_length = hop_length
         self.mag = mag
         self.num_layers = num_layers
+        self.sr = 16000
 
         if self.ft_container == 'magphase' and self.embed != 'stretch':
             raise Exception('Mag+phase does not work with embeddings other than stretch')
@@ -335,8 +334,11 @@ class StegoUNet(nn.Module):
         self.align = AlignmentLayer(self.num_points)
 
         # transform
-        if voice_clone_valid:
+        print("Loading Voice Cloning model...")
+        self.voice_clone_valid = True
+        if self.voice_clone_valid:
             preload_models()
+        print("Finish loading!")
 
     def stft(self, data, return_complex=True):
         window = torch.hann_window(self.n_fft).to(data.device)
@@ -349,7 +351,7 @@ class StegoUNet(nn.Module):
         return torch.istft(signal_wmd_fft, n_fft=self.n_fft, hop_length=self.hop_length, window=window,
                            return_complex=False)
 
-    def forward(self, secret, cover):
+    def forward(self, secret, cover, transcripts, text_prompts):
         # wavmark
 
         ## encode
@@ -368,7 +370,18 @@ class StegoUNet(nn.Module):
 
         ## transform
         # transform_ct_wav = watermark_ct_wav
-        transform_ct_wav = Transform.apply(watermark_ct_wav, self.num_points, "NS", None)
+        if self.voice_clone_valid:
+            transform_ct_wavs = []
+            for transcript, text_prompt in zip(transcripts, text_prompts):
+                transform_ct_wav_tmp = Transform.apply(watermark_ct_wav, self.num_points, "VC",
+                                                       {"sample_rate": self.sr,
+                                                        "transcript": transcript,
+                                                        "text_prompt": text_prompt})
+                transform_ct_wavs.append(transform_ct_wav_tmp)
+            transform_ct_wav = torch.cat(transform_ct_wavs, dim=0).to(watermark_ct_wav.device)
+
+        else:
+            transform_ct_wav = Transform.apply(watermark_ct_wav, self.num_points, "ID", None)
 
         ## length alignment  TODO: handle unfixed length
         # transform_ct_wav = self.align(transform_ct_wav)

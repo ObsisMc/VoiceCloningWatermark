@@ -13,7 +13,8 @@ import wandb
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from src.losses import ssim, SNR, PSNR, StegoLoss, calc_ber, signal_noise_ratio, batch_signal_noise_ratio, batch_calc_ber
+from src.losses import ssim, SNR, PSNR, StegoLoss, calc_ber, signal_noise_ratio, batch_signal_noise_ratio, \
+    batch_calc_ber
 from src.visualization import viz2paper, viz4seq
 
 
@@ -90,12 +91,13 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
             # (B,secret_len), (B,secret_len,), (B,L)  B=1
             secrets, secrets_bin, covers = data[0][0].to(device), data[0][1].to(device), data[1].to(device)
             secrets = secrets.type(torch.cuda.FloatTensor)
+            transcripts, text_prompts = data[2], data[3]
 
             optimizer.zero_grad()
 
             # Forward through the model
             # (B,N,T,C), (B,N,T,C), (B,L), (B,secret_len)
-            cover_fft, containers_fft, container_wav, revealed = model(secrets, covers)
+            cover_fft, containers_fft, container_wav, revealed = model(secrets, covers, transcripts, text_prompts)
             # Compute the loss
             # cover_fft = cover_fft.squeeze(0)
             # containers_fft = containers_fft.squeeze(0)
@@ -306,10 +308,11 @@ def validate(model, vd_loader, beta, val_size=50, transform='cosine', transform_
             # (B,secret_len), (B,secret_len,), (B,L)  B=1
             secrets, secrets_bin, covers = data[0][0].to(device), data[0][1].to(device), data[1].to(device)
             secrets = secrets.type(torch.cuda.FloatTensor)
+            transcripts, text_prompts = data[2], data[3]
 
             # Forward through the model
             # (B,N,T,2), (B,N,T,2), (B,L), (B,secret_len)
-            cover_fft, containers_fft, container_wav, revealed = model(secrets, covers)
+            cover_fft, containers_fft, container_wav, revealed = model(secrets, covers, transcripts, text_prompts)
 
             # Visualize results
             if i == 0:
