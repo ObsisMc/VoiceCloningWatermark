@@ -12,6 +12,7 @@ umodel.py
 '''
 
 import torch
+import librosa
 import numpy as np
 import torch.nn as nn
 from torch import utils
@@ -248,7 +249,13 @@ class Transform(torch.autograd.Function):
             wav = wav[:, :int(num_points * alpha / 10)]
         elif name == "RS":  # resample to make it longer
             alpha = torch.rand(1) * 4 + 1
-            wav = torchaudio.functional.resample(wav, num_points, int(num_points * alpha.item()))
+            wav = torch.from_numpy(
+                librosa.resample(
+                    wav.detach().cpu().numpy(), orig_sr=num_points, target_sr=int(num_points * alpha.item())
+                )
+            ).float().to(wav.device)
+            # wav = torchaudio.functional.resample(wav, num_points, int(num_points * alpha.item()))
+            # wav =torchaudio.transforms.Resample(num_points, int(num_points * alpha.item())).to(device)(wav)
         # TODO: add noise
         elif name == "NS":
             noise = torch.normal(0, 1e-4, (wav.size(0), wav.size(1))).to(device)
@@ -265,7 +272,7 @@ class Transform(torch.autograd.Function):
                                            audio_tokens=audio_tokens,
                                            text_tokens=text_tokens, lang_pr=lang_pr)
 
-            wav = torch.tensor(wav).unsqueeze(0).to(device)
+            wav = wav.detach().clone().unsqueeze(0).to(device)
         else:
             raise ValueError("Invalid transform name")
 
@@ -372,8 +379,9 @@ class StegoUNet(nn.Module):
         # transform_ct_wav = watermark_ct_wav
         if self.voice_clone_valid:
             transform_ct_wavs = []
-            for transcript, text_prompt in zip(transcripts, text_prompts):
-                transform_ct_wav_tmp = Transform.apply(watermark_ct_wav, self.num_points, "VC",
+            for i, (transcript, text_prompt) in enumerate(zip(transcripts, text_prompts)):
+                print(transcript, text_prompt)
+                transform_ct_wav_tmp = Transform.apply(watermark_ct_wav[i][None,...], self.num_points, "VC",
                                                        {"sample_rate": self.sr,
                                                         "transcript": transcript,
                                                         "text_prompt": text_prompt})

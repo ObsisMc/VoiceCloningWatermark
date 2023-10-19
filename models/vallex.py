@@ -592,7 +592,7 @@ class VALLE(VALLF):
                     y = worst_beam.unsqueeze(0)
                 else:
                     y = best_beam.unsqueeze(0)
-                print(f"VALL-E EOS [{prompts.shape[1]} -> {y.shape[1]}]")
+                #print(f"VALL-E EOS [{prompts.shape[1]} -> {y.shape[1]}]")
                 break
 
             y = torch.concat([y, samples], dim=1)

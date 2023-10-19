@@ -22,6 +22,7 @@ import torch
 import torchaudio
 from encodec import EncodecModel
 from encodec.utils import convert_audio
+import librosa
 
 try:
     from pypinyin import Style, pinyin
@@ -102,7 +103,22 @@ def tokenize_audio(tokenizer: AudioTokenizer, audio):
         wav, sr = torchaudio.load(audio)
     else:
         wav, sr = audio
-    wav = convert_audio(wav, sr, tokenizer.sample_rate, tokenizer.channels)
+
+    assert wav.shape[0] in [1, 2], "Audio must be mono or stereo."
+    target_channels, target_sr = tokenizer.channels, tokenizer.sample_rate
+    if target_channels == 1:
+        wav = wav.mean(0, keepdim=True)
+    elif target_channels == 2:
+        *shape, _, length = wav.shape
+        wav = wav.expand(*shape, target_channels, length)
+    elif wav.shape[0] == 1:
+        wav = wav.expand(target_channels, -1)
+    wav = torch.from_numpy(
+        librosa.resample(
+            wav.detach().cpu().numpy(), orig_sr=sr, target_sr=target_sr
+        )
+    ).float().to(wav.device)
+
     wav = wav.unsqueeze(0)
 
     # Extract discrete codes from EnCodec
