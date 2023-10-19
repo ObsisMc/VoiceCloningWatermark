@@ -82,9 +82,8 @@ class StegoDataset(torch.utils.data.Dataset):
             image_extension: str = "JPEG",
             audio_extension: str = "wav"
     ):
-
         self.data_root = pathlib.Path(f"{audio_root}{folder}")
-        self.max_data_num = 20000 if folder == "train" else 1000
+        self.max_data_num = 50000 if folder == "train" else 3600
         self.num_points = num_points
         self.watermark_len = 32
 
@@ -100,14 +99,20 @@ class StegoDataset(torch.utils.data.Dataset):
         return self.data_index.size(-1)
 
     def __getitem__(self, index):
+        # load cloned audio and its transcript
         data_index = self.data_index[index].item()
         data_path = os.path.join(self.data_root, str(data_index))
-
         audio = preprocess_audio(os.path.join(data_path, "speech.wav"), num_points=self.num_points)
         with open(os.path.join(data_path, "text.txt"), "r") as f:
             transcript = f.read()
-        text_prompt = "Voice cloning test"
 
+        # load text_prompt
+        text_prompt_index = torch.randint(len(self), (1,)).item()
+        text_prompt_path = os.path.join(self.data_root, str(text_prompt_index))
+        with open(os.path.join(text_prompt_path, "text.txt"), "r") as f:
+            text_prompt = f.read()
+
+        # generate watermark
         # torch.manual_seed(rand_seq_seed)
         sequence = torch.rand(self.watermark_len)  # (secret_len,)
         sequence_binary = (sequence > 0.5).int()
