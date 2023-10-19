@@ -114,8 +114,7 @@ def make_prompt_train(name, audio_prompt, sr, transcript=None):
     return audio_tokens, text_tokens, lang2code[lang_pr]
 
 def make_transcript(name, wav, sr, transcript=None):
-
-    if not isinstance(wav, torch.FloatTensor):
+    if not isinstance(wav, torch.FloatTensor) and not isinstance(wav, torch.cuda.FloatTensor):
         wav = torch.tensor(wav)
     if wav.abs().max() > 1:
         wav /= wav.abs().max()

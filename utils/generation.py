@@ -29,7 +29,7 @@ from macros import *
 
 device = torch.device("cpu")
 if torch.cuda.is_available():
-    device = torch.device("cuda", 0)
+    device = torch.device("cuda")
 if torch.backends.mps.is_available():
     device = torch.device("mps")
 url = 'https://huggingface.co/Plachta/VALL-E-X/resolve/main/vallex-checkpoint.pt'
