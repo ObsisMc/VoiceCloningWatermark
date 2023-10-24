@@ -5,8 +5,8 @@ def viz2paper(s, r, cv, ct, cv_phase, ct_phase, transform, ft_container, log=Tru
 
     # 'ct_phase' is the STFT phase when using mag+phase
     # Otherwise 'ct' is the only container
-    assert not ((transform == 'fourier' and ft_container == 'magphase') and ct_phase is None)
-    assert not ((transform == 'fourier' and ft_container != 'magphase') and ct_phase is not None)
+    transform = 'fourier'
+    ft_container = "mag"
 
     # Define transform and container names to use in the plot
     if transform == 'cosine':
@@ -112,8 +112,8 @@ def viz4seq(s, r, cv, ct, cv_phase, ct_phase, transform, ft_container, log=True)
 
     # 'ct_phase' is the STFT phase when using mag+phase
     # Otherwise 'ct' is the only container
-    assert not ((transform == 'fourier' and ft_container == 'magphase') and ct_phase is None)
-    assert not ((transform == 'fourier' and ft_container != 'magphase') and ct_phase is not None)
+    transform = 'fourier'
+    ft_container = "mag"
 
     # Define transform and container names to use in the plot
     if transform == 'cosine':

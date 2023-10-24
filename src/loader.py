@@ -74,13 +74,7 @@ class StegoDataset(torch.utils.data.Dataset):
             self,
             audio_root: str,
             folder: str,
-            mappings: dict,
-            num_points: int,
-            rgb: bool = True,
-            transform: str = 'cosine',
-            stft_small: bool = True,
-            image_extension: str = "JPEG",
-            audio_extension: str = "wav"
+            num_points: int
     ):
         self.data_root = pathlib.Path(f"{audio_root}{folder}")
         self.max_data_num = 50000 if folder == "train" else 3600
@@ -91,6 +85,13 @@ class StegoDataset(torch.utils.data.Dataset):
         total_data_num = len(os.listdir(self.data_root))
         torch.manual_seed(2023)
         self.data_index = torch.randperm(total_data_num)[:self.max_data_num]
+
+        # default audio, transcript and text_prompt
+        data_path = os.path.join(self.data_root, "0")
+        self.default_audio = preprocess_audio(os.path.join(data_path, "speech.wav"), num_points=self.num_points)
+        with open(os.path.join(data_path, "text.txt"), "r") as f:
+            self.default_transcript = self.default_text_prompt = f.read()
+        assert self.default_transcript != "" and self.default_text_prompt != ""
 
         print(f'DATA LOCATED AT: {self.data_root}')
         print('Set up done')
@@ -105,12 +106,20 @@ class StegoDataset(torch.utils.data.Dataset):
         audio = preprocess_audio(os.path.join(data_path, "speech.wav"), num_points=self.num_points)
         with open(os.path.join(data_path, "text.txt"), "r") as f:
             transcript = f.read()
+        if transcript == "":
+            audio = self.default_audio
+            transcript = self.default_transcript
+            print(f"Sample {data_index} has empty text")
 
         # load text_prompt
         text_prompt_index = torch.randint(len(self), (1,)).item()
         text_prompt_path = os.path.join(self.data_root, str(text_prompt_index))
         with open(os.path.join(text_prompt_path, "text.txt"), "r") as f:
             text_prompt = f.read()
+        if text_prompt == "":
+            text_prompt = self.default_text_prompt
+            print(f"Sample {text_prompt_index} has empty text")
+
 
         # generate watermark
         # torch.manual_seed(rand_seq_seed)
@@ -120,7 +129,7 @@ class StegoDataset(torch.utils.data.Dataset):
         return (sequence, sequence_binary), audio, transcript, text_prompt
 
 
-def loader(set='train', num_points=64000, rgb=True, transform='cosine', stft_small=True, batch_size=1, shuffle=False):
+def loader(set, num_points, batch_size, shuffle):
     """
     Prepares the custom dataloader.
     - [set] defines the set type. Can be either [train] or [test].
@@ -130,15 +139,10 @@ def loader(set='train', num_points=64000, rgb=True, transform='cosine', stft_sma
     either [cosine] or [fourier].
     """
     print('Preparing dataset...')
-    mappings = {}
 
     dataset = StegoDataset(
         audio_root=AUDIO_FOLDER,
         folder=set,
-        mappings=mappings,
-        rgb=rgb,
-        transform=transform,
-        stft_small=stft_small,
         num_points=num_points
     )
 

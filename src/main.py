@@ -83,7 +83,7 @@ parser.add_argument('--num_epochs',
                     )
 parser.add_argument('--batch_size',
                         type=int,
-                        default=10,
+                        default=128,
                         metavar='INT',
                         help='Size of the data batch'
                     )
@@ -104,12 +104,6 @@ parser.add_argument('--from_checkpoint',
                         type=parse_keyword,
                         default=False,
                         help='Use checkpoint listed by experiment number'
-                    )
-parser.add_argument('--transform',
-                        type=str,
-                        default='fourier',
-                        metavar='STR',
-                        help='Which transform to use: [cosine] or [fourier]'
                     )
 parser.add_argument('--stft_small',
                         type=parse_keyword,
@@ -184,6 +178,11 @@ parser.add_argument("--mag",
 parser.add_argument('--num_layers',
                     type=int,
                     default=2)
+parser.add_argument('--transform',
+                    type=str,
+                    choices=["ID", "TC", "RS", "VC"],
+                    default="ID",
+                   )
 
 
 if __name__ == '__main__':
@@ -196,16 +195,12 @@ if __name__ == '__main__':
 
     train_loader = loader(
         set='train',
-        transform=args.transform,
-        stft_small=args.stft_small,
         batch_size=args.batch_size,
         shuffle=True,
         num_points=args.num_points
     )
     test_loader = loader(
         set='test',
-        transform=args.transform,
-        stft_small=args.stft_small,
         batch_size=args.batch_size,
         shuffle=True,
         num_points=args.num_points
@@ -213,14 +208,6 @@ if __name__ == '__main__':
 
     model = StegoUNet(
         transform=args.transform,
-        stft_small=args.stft_small,
-        ft_container=args.ft_container,
-        mp_encoder=args.mp_encoder,
-        mp_decoder=args.mp_decoder,
-        mp_join=args.mp_join,
-        permutation=args.permutation,
-        embed=args.embed,
-        luma=args.luma,
         num_points=args.num_points,
         n_fft=args.n_fft,
         hop_length=args.hop_length,
@@ -249,7 +236,7 @@ if __name__ == '__main__':
         epochs=args.num_epochs,
         val_itvl=args.val_itvl,
         val_size=args.val_size,
-        slide=15,
+        slide=1,
         prev_epoch=checkpoint['epoch'] if args.from_checkpoint else None,
         prev_i=checkpoint['i'] if args.from_checkpoint else None,
         summary=args.summary,

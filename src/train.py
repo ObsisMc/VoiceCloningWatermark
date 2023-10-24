@@ -29,7 +29,7 @@ def save_checkpoint(state, is_best, filename=os.path.join(os.environ.get('OUT_PA
 
 
 def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, val_size=50, prev_epoch=None, prev_i=None,
-          summary=None, slide=50, experiment=0, transform='cosine', stft_small=True, ft_container='mag', thet=0,
+          summary=None, slide=1, experiment=0, transform='cosine', stft_small=True, ft_container='mag', thet=0,
           dtw=False):
     # Initialize wandb logs
     wandb.init(project='PixInWavRGB')
@@ -62,7 +62,7 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
     ini = time.time()
     best_loss = np.inf
     best_snr = - np.inf
-    ber_threshold = 1 / 32
+    ber_threshold = 1 / 32 / 2
 
     # Initialize waveform loss constructor
     if dtw:
@@ -90,6 +90,7 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
             # Load data from the loader
             # (B,secret_len), (B,secret_len,), (B,L)  B=1
             secrets, secrets_bin, covers = data[0][0].to(device), data[0][1].to(device), data[1].to(device)
+            # print(f"get secrets_bin: {secrets_bin} ({secrets_bin.bool().sum(-1)})")
             secrets = secrets.type(torch.cuda.FloatTensor)
             transcripts, text_prompts = data[2], data[3]
 

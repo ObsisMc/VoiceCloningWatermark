@@ -290,22 +290,10 @@ class Transform(torch.autograd.Function):
 
 
 class StegoUNet(nn.Module):
-    def __init__(self, transform='cosine', stft_small=True, ft_container='mag', mp_encoder='single',
-                 mp_decoder='double', mp_join='mean', permutation=False, embed='stretch', luma='luma',
-                 num_points=63600, n_fft=1022, hop_length=400, mag=False, num_layers=1):
+    def __init__(self, transform, num_points=63600, n_fft=1022, hop_length=400, mag=False, num_layers=1):
         assert mag == False and num_layers > 0
 
         super().__init__()
-
-        self.transform = transform
-        self.stft_small = stft_small
-        self.ft_container = ft_container
-        self.mp_encoder = mp_encoder
-        self.mp_decoder = mp_decoder
-        self.mp_join = mp_join
-        self.permutation = permutation
-        self.embed = embed
-        self.luma = luma
 
         self.num_points = num_points
         self.n_fft = n_fft
@@ -313,23 +301,7 @@ class StegoUNet(nn.Module):
         self.mag = mag
         self.num_layers = num_layers
         self.sr = 16000
-
-        if self.ft_container == 'magphase' and self.embed != 'stretch':
-            raise Exception('Mag+phase does not work with embeddings other than stretch')
-        if self.luma and self.embed == 'multichannel':
-            raise Exception('Luma is not compatible with multichannel')
-
-        if transform != 'fourier' or ft_container != 'magphase':
-            self.mp_decoder = None  # For compatiblity with RevealNet
-
-        # Sub-networks
-        self.PHN = PrepHidingNet(self.transform, self.stft_small, self.embed, num_points=self.num_points,
-                                 n_fft=self.n_fft, hop_length=self.hop_length, mag=self.mag)
-        self.encode_subnets = nn.ModuleList([ResidualDenseBlock_out(2, 2) for _ in range(self.num_layers)])
-
-        self.decode_subnets = nn.ModuleList([ResidualDenseBlock_out(2, 2) for _ in range(self.num_layers)])
-        self.RN = RevealNet(self.mp_decoder, self.stft_small, self.embed, self.luma, num_points=self.num_points,
-                            n_fft=self.n_fft, hop_length=self.hop_length, mag=self.mag)
+        self.transform = transform
 
         # wavmark
         self.watermark_fc = nn.Linear(32, self.num_points)
@@ -341,11 +313,11 @@ class StegoUNet(nn.Module):
         self.align = AlignmentLayer(self.num_points)
 
         # transform
-        print("Loading Voice Cloning model...")
-        self.voice_clone_valid = True
-        if self.voice_clone_valid:
+        self.transform_layer = lambda audio, data_dict: Transform.apply(audio, self.num_points, self.transform, data_dict)
+        if self.transform == "VC":
+            print("Loading Voice Cloning model...")
             preload_models()
-        print("Finish loading!")
+            print("Finish loading!")
 
     def stft(self, data, return_complex=True):
         window = torch.hann_window(self.n_fft).to(data.device)
@@ -377,19 +349,19 @@ class StegoUNet(nn.Module):
 
         ## transform
         # transform_ct_wav = watermark_ct_wav
-        if self.voice_clone_valid:
+        if self.transform == "VC":
             transform_ct_wavs = []
             for i, (transcript, text_prompt) in enumerate(zip(transcripts, text_prompts)):
-                print(transcript, text_prompt)
-                transform_ct_wav_tmp = Transform.apply(watermark_ct_wav[i][None,...], self.num_points, "VC",
-                                                       {"sample_rate": self.sr,
-                                                        "transcript": transcript,
-                                                        "text_prompt": text_prompt})
+                print(f"transcript: {transcript} <---> text_prompt: {text_prompt}")
+                transform_ct_wav_tmp = self.transform_layer(watermark_ct_wav[i][None,...],
+                                                           {"sample_rate": self.sr,
+                                                            "transcript": transcript,
+                                                            "text_prompt": text_prompt})
                 transform_ct_wavs.append(transform_ct_wav_tmp)
             transform_ct_wav = torch.cat(transform_ct_wavs, dim=0).to(watermark_ct_wav.device)
 
         else:
-            transform_ct_wav = Transform.apply(watermark_ct_wav, self.num_points, "ID", None)
+            transform_ct_wav = self.transform_layer(watermark_ct_wav, None)
 
         ## length alignment  TODO: handle unfixed length
         # transform_ct_wav = self.align(transform_ct_wav)
@@ -440,7 +412,8 @@ class StegoUNet(nn.Module):
         _, message_restored_fft_real = self.enc_dec(sign_fft_real, watermark_fft_real, rev=True)
         message_restored_fft = torch.view_as_complex(message_restored_fft_real.contiguous())
         message_restored_expanded = self.istft(message_restored_fft)
-        revealed = self.watermark_fc_back(message_restored_expanded).clamp(-1, 1)
+        revealed = self.watermark_fc_back(message_restored_expanded)
+        revealed = torch.sigmoid(revealed)
         return revealed
 
 
