@@ -108,7 +108,7 @@ def viz2paper(s, r, cv, ct, cv_phase, ct_phase, transform, ft_container, log=Tru
 
     return fig
 
-def viz4seq(s, r, cv, ct, cv_phase, ct_phase, transform, ft_container, log=True):
+def viz4seq(s, r, cv, ct, cv_phase, ct_phase,log=True):
 
     # 'ct_phase' is the STFT phase when using mag+phase
     # Otherwise 'ct' is the only container
