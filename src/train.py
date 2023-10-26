@@ -162,6 +162,7 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
                 else:
                     is_best = bool(valid_snr > best_snr)
                 # TODO: print best loss and best snr, record parameters' info like current learning rate
+                print(f"Current best -> best loss:{best_loss}, best snr: {best_snr}")
                 best_loss = min(best_loss, valid_loss)
                 best_snr = max(best_snr, valid_snr)
 
@@ -187,6 +188,7 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
                     'wm_loss_name': criterion_wm_name
                 }, is_best=is_best, filename=os.path.join(os.environ.get('OUT_PATH'),
                                                           f'{experiment}-{summary}/{epoch + 1}-{experiment}-{summary}.pt'))
+                print(f"Current best -> best loss:{best_loss}, best snr: {best_snr}")
 
                 # Print headers again to resume training
                 print()
