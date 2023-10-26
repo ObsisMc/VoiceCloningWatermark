@@ -183,7 +183,10 @@ parser.add_argument('--transform',
                     choices=["ID", "TC", "RS", "VC"],
                     default="ID",
                    )
-
+parser.add_argument("--dataset_i",
+                    type=int,
+                    choices=[0, 1],
+                    default=0)
 
 if __name__ == '__main__':
     set_reproductibility()
@@ -197,13 +200,15 @@ if __name__ == '__main__':
         set='train',
         batch_size=args.batch_size,
         shuffle=True,
-        num_points=args.num_points
+        num_points=args.num_points,
+        dataset_i=args.dataset_i
     )
     test_loader = loader(
         set='test',
         batch_size=args.batch_size,
         shuffle=True,
-        num_points=args.num_points
+        num_points=args.num_points,
+        dataset_i=args.dataset_i
     )
 
     model = StegoUNet(
