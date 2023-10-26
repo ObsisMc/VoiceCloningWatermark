@@ -75,13 +75,14 @@ class StegoDataset(torch.utils.data.Dataset):
             self,
             audio_root_i: int,
             folder: str,
-            num_points: int
+            num_points: int,
+            watermark_len: int
     ):
         self.audio_root_i = audio_root_i
         self.data_root = pathlib.Path(f"{AUDIO_FOLDER[self.audio_root_i]}{folder}")
         self.max_data_num = 50000 if folder == "train" else 3600
         self.num_points = num_points
-        self.watermark_len = 32
+        self.watermark_len = watermark_len
 
         # dataset 0
         if self.audio_root_i == 0:
@@ -147,7 +148,7 @@ class StegoDataset(torch.utils.data.Dataset):
         return (sequence, sequence_binary), audio, transcript, text_prompt
 
 
-def loader(set, num_points, batch_size, shuffle, dataset_i):
+def loader(set, num_points, batch_size, shuffle, watermark_len, dataset_i):
     """
     Prepares the custom dataloader.
     - [set] defines the set type. Can be either [train] or [test].
@@ -161,7 +162,8 @@ def loader(set, num_points, batch_size, shuffle, dataset_i):
     dataset = StegoDataset(
         audio_root_i=dataset_i,
         folder=set,
-        num_points=num_points
+        num_points=num_points,
+        watermark_len=watermark_len
     )
 
     print('Dataset prepared.')

@@ -183,6 +183,9 @@ parser.add_argument('--transform',
                     choices=["ID", "TC", "RS", "VC"],
                     default="ID",
                    )
+parser.add_argument("--watermark_len",
+                    type=int,
+                    default=32)
 parser.add_argument("--dataset_i",
                     type=int,
                     choices=[0, 1],
@@ -201,14 +204,16 @@ if __name__ == '__main__':
         batch_size=args.batch_size,
         shuffle=True,
         num_points=args.num_points,
-        dataset_i=args.dataset_i
+        dataset_i=args.dataset_i,
+        watermark_len=args.watermark_len
     )
     test_loader = loader(
         set='test',
         batch_size=args.batch_size,
         shuffle=True,
         num_points=args.num_points,
-        dataset_i=args.dataset_i
+        dataset_i=args.dataset_i,
+        watermark_len=args.watermark_len
     )
 
     model = StegoUNet(
@@ -217,7 +222,8 @@ if __name__ == '__main__':
         n_fft=args.n_fft,
         hop_length=args.hop_length,
         mag=args.mag,
-        num_layers=args.num_layers
+        num_layers=args.num_layers,
+        watermark_len=args.watermark_len
     )
 
     if args.from_checkpoint:

@@ -290,7 +290,8 @@ class Transform(torch.autograd.Function):
 
 
 class StegoUNet(nn.Module):
-    def __init__(self, transform, num_points=63600, n_fft=1022, hop_length=400, mag=False, num_layers=1):
+    def __init__(self, transform, num_points, n_fft, hop_length,
+                 mag, num_layers, watermark_len):
         assert mag == False and num_layers > 0
 
         super().__init__()
@@ -302,12 +303,13 @@ class StegoUNet(nn.Module):
         self.num_layers = num_layers
         self.sr = 16000
         self.transform = transform
+        self.watermark_len = watermark_len
 
         # wavmark
-        self.watermark_fc = nn.Linear(32, self.num_points)
+        self.watermark_fc = nn.Linear(self.watermark_len, self.num_points)
         self.hinet = Hinet(num_layers=self.num_layers)
         self.hinet_r = Hinet(num_layers=self.num_layers)
-        self.watermark_fc_back = nn.Linear(self.num_points, 32)
+        self.watermark_fc_back = nn.Linear(self.num_points, self.watermark_len)
 
         # alignment
         self.align = AlignmentLayer(self.num_points)
