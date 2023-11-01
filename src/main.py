@@ -229,7 +229,8 @@ if __name__ == '__main__':
         hop_length=args.hop_length,
         mag=args.mag,
         num_layers=args.num_layers,
-        watermark_len=args.watermark_len
+        watermark_len=args.watermark_len,
+        shift_ratio=args.shift_ratio
     )
 
     if args.from_checkpoint:

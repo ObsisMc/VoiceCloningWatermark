@@ -36,8 +36,8 @@ def preprocess_audio(audio: str | torch.Tensor, num_points, shift_ratio: float, 
     if C > 1:
         raise NotImplemented("Can only handle sounds with over one channel")
     else:
-        shift_len = int(num_points * np.random.uniform(0, shift_ratio))
-        total_points = num_points + shift_len * 2
+        shift_len_max = int(num_points * shift_ratio)
+        total_points = num_points + shift_len_max * 2
         if L < total_points:
             # simplify the situation
             if L < num_points:
@@ -46,15 +46,15 @@ def preprocess_audio(audio: str | torch.Tensor, num_points, shift_ratio: float, 
             else:
                 sound = sound[:, :num_points]
 
-            shift_left = torch.zeros((sound.shape[0], shift_len)).to(device)
-            shift_right = torch.zeros((sound.shape[0], shift_len)).to(device)
+            shift_left = torch.zeros((sound.shape[0], shift_len_max)).to(device)
+            shift_right = torch.zeros((sound.shape[0], shift_len_max)).to(device)
         else:
-            shift_left = sound[:, :shift_len]
-            shift_right = sound[:, num_points + shift_len: num_points + shift_len * 2]
-            sound = sound[:, shift_len:num_points + shift_len]
+            shift_left = sound[:, :shift_len_max]
+            shift_right = sound[:, num_points + shift_len_max: num_points + shift_len_max * 2]
+            sound = sound[:, shift_len_max:num_points + shift_len_max]
 
     sound = sound.squeeze(0).to(device)  # (L,)
-    if shift_len != 0:
+    if shift_len_max != 0:
         shift_sound = [shift_left.squeeze(0).to(device), shift_right.squeeze(0).to(device)]
     else:
         shift_sound = []
@@ -103,9 +103,10 @@ class StegoDataset(torch.utils.data.Dataset):
 
             # default audio, transcript and text_prompt
             data_path = os.path.join(self.data_root, "0")
-            self.default_audio, self.shift_sound = preprocess_audio(os.path.join(data_path, "speech.wav"),
-                                                                    num_points=self.num_points,
-                                                                    shift_ratio=self.shift_ratio)
+            self.default_audio, self.shift_sound = preprocess_audio(
+                os.path.join(data_path, "speech.wav"),
+                num_points=self.num_points,
+                shift_ratio=self.shift_ratio)
             with open(os.path.join(data_path, "text.txt"), "r") as f:
                 self.default_transcript = self.default_text_prompt = f.read()
             assert self.default_transcript != "" and self.default_text_prompt != ""
@@ -139,6 +140,7 @@ class StegoDataset(torch.utils.data.Dataset):
             if transcript == "":
                 audio = self.default_audio
                 transcript = self.default_transcript
+                shift_sound = self.shift_sound
                 print(f"Sample {data_index} has empty text")
 
             # load text_prompt
@@ -156,6 +158,8 @@ class StegoDataset(torch.utils.data.Dataset):
             audio, shift_sound = preprocess_audio(os.path.join(data_path),
                                                   num_points=self.num_points,
                                                   shift_ratio=self.shift_ratio)
+        else:
+            raise ValueError("Unknown dataset")
 
         # generate watermark
         # torch.manual_seed(rand_seq_seed)

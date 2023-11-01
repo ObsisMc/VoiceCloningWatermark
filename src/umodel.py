@@ -291,7 +291,7 @@ class Transform(torch.autograd.Function):
 
 class StegoUNet(nn.Module):
     def __init__(self, transform, num_points, n_fft, hop_length,
-                 mag, num_layers, watermark_len):
+                 mag, num_layers, watermark_len, shift_ratio):
         assert mag == False and num_layers > 0
 
         super().__init__()
@@ -304,6 +304,7 @@ class StegoUNet(nn.Module):
         self.sr = 16000
         self.transform = transform
         self.watermark_len = watermark_len
+        self.shift_ratio = shift_ratio
 
         # wavmark
         self.watermark_fc = nn.Linear(self.watermark_len, self.num_points)
@@ -370,12 +371,12 @@ class StegoUNet(nn.Module):
         if shift_sound:
             shift_idx = np.random.randint(0, 2)
             shift_sound = shift_sound[shift_idx]
-            shift_len = shift_sound.size(1)
+            shift_len = int(self.num_points * np.random.uniform(0, self.shift_ratio))
             if shift_idx:
-                transform_ct_wav = torch.cat([transform_ct_wav[:, :-shift_len], shift_sound], dim=-1).to(
+                transform_ct_wav = torch.cat([transform_ct_wav[:, shift_len:], shift_sound[:, :shift_len]], dim=-1).to(
                     transform_ct_wav.device)
             else:
-                transform_ct_wav = torch.cat([shift_sound, transform_ct_wav[:, shift_len:]], dim=-1).to(
+                transform_ct_wav = torch.cat([shift_sound[:, -shift_len:], transform_ct_wav[:, :-shift_len]], dim=-1).to(
                     transform_ct_wav.device)
 
         ## length alignment  TODO: handle unfixed length

@@ -100,7 +100,7 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
             secrets, secrets_bin, covers = data[0][0].to(device), data[0][1].to(device), data[1].to(device)
             secrets = secrets.type(torch.cuda.FloatTensor)
             transcripts, text_prompts = data[2], data[3]
-            shift_sound = data[4]
+            shift_sound = data[4].to(device)
 
             optimizer.zero_grad()
 
