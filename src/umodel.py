@@ -248,14 +248,14 @@ class Transform(torch.autograd.Function):
             alpha = torch.randint(3, 10, (1,))
             wav = wav[:, :int(num_points * alpha / 10)]
         elif name == "RS":  # resample to make it longer
-            alpha = torch.rand(1) * 4 + 1
-            wav = torch.from_numpy(
-                librosa.resample(
-                    wav.detach().cpu().numpy(), orig_sr=num_points, target_sr=int(num_points * alpha.item())
-                )
-            ).float().to(wav.device)
+            alpha = torch.rand(1) * 1. + 0.5
+            #wav = torch.from_numpy(
+            #    librosa.resample(
+            #        wav.detach().cpu().numpy(), orig_sr=num_points, target_sr=int(num_points * alpha.item())
+            #    )
+            #).float().to(wav.device)
             # wav = torchaudio.functional.resample(wav, num_points, int(num_points * alpha.item()))
-            # wav =torchaudio.transforms.Resample(num_points, int(num_points * alpha.item())).to(device)(wav)
+            wav =torchaudio.transforms.Resample(num_points, int(num_points * alpha.item())).to(device)(wav)
         # TODO: add noise
         elif name == "NS":
             noise = torch.normal(0, 1e-4, (wav.size(0), wav.size(1))).to(device)
@@ -305,6 +305,7 @@ class StegoUNet(nn.Module):
         self.transform = transform
         self.watermark_len = watermark_len
         self.shift_ratio = shift_ratio
+        self.shift_max_len = int(self.num_points * self.shift_ratio)
 
         # wavmark
         self.watermark_fc = nn.Linear(self.watermark_len, self.num_points)
@@ -352,15 +353,14 @@ class StegoUNet(nn.Module):
         watermark_ct_wav = self.istft(signal_wmd_fft)
 
         ## transform
-        # transform_ct_wav = watermark_ct_wav
         if self.transform == "VC":
             transform_ct_wavs = []
             for i, (transcript, text_prompt) in enumerate(zip(transcripts, text_prompts)):
-                print(f"transcript: {transcript} <---> text_prompt: {text_prompt}")
-                transform_ct_wav_tmp = self.transform_layer(watermark_ct_wav[i][None, ...],
-                                                            {"sample_rate": self.sr,
-                                                             "transcript": transcript,
-                                                             "text_prompt": text_prompt})
+                # print(f"transcript: {transcript} <---> text_prompt: {text_prompt}")
+                transform_ct_wav_tmp = self.transform_layer(watermark_ct_wav[i][None,...],
+                                                           {"sample_rate": self.sr,
+                                                            "transcript": transcript,
+                                                            "text_prompt": text_prompt})
                 transform_ct_wavs.append(transform_ct_wav_tmp)
             transform_ct_wav = torch.cat(transform_ct_wavs, dim=0).to(watermark_ct_wav.device)
 
@@ -372,19 +372,26 @@ class StegoUNet(nn.Module):
             shift_idx = np.random.randint(0, 2)
             shift_sound = shift_sound[shift_idx]
             shift_len = int(self.num_points * np.random.uniform(0, self.shift_ratio))
+
             if shift_idx:
                 transform_ct_wav = torch.cat([transform_ct_wav[:, shift_len:], shift_sound[:, :shift_len]], dim=-1).to(
                     transform_ct_wav.device)
             else:
-                transform_ct_wav = torch.cat([shift_sound[:, -shift_len:], transform_ct_wav[:, :-shift_len]], dim=-1).to(
+                transform_ct_wav = torch.cat([shift_sound[:, self.shift_max_len-shift_len:], transform_ct_wav[:, :self.shift_max_len-shift_len]], dim=-1).to(
                     transform_ct_wav.device)
 
+        
         ## length alignment  TODO: handle unfixed length
         # transform_ct_wav = self.align(transform_ct_wav)
 
-        ## decode
+        ## stft before decode
         signal_fft = self.stft(transform_ct_wav)
         sign_fft_real = torch.view_as_real(signal_fft)
+
+        ## direct connect
+        # sign_fft_real = signal_wmd_fft_real
+        
+
         watermark_fft_real = sign_fft_real  # obsismc: different from what the paper says
         _, message_restored_fft_real = self.enc_dec(sign_fft_real, watermark_fft_real, rev=True)
         message_restored_fft = torch.view_as_complex(message_restored_fft_real.contiguous())
