@@ -100,12 +100,17 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
             secrets, secrets_bin, covers = data[0][0].to(device), data[0][1].to(device), data[1].to(device)
             secrets = secrets.type(torch.cuda.FloatTensor)
             transcripts, text_prompts = data[2], data[3]
+            shift_sound = data[4]
 
             optimizer.zero_grad()
 
             # Forward through the model
             # (B,N,T,C), (B,N,T,C), (B,L), (B,secret_len)
-            cover_fft, containers_fft, container_wav, revealed = model(secrets, covers, transcripts, text_prompts)
+            cover_fft, containers_fft, container_wav, revealed = model(secrets,
+                                                                       covers,
+                                                                       transcripts,
+                                                                       text_prompts,
+                                                                       shift_sound=shift_sound)
 
             # loss
             # loss, loss_cover, loss_secret, loss_spectrum = StegoLoss(secrets, cover_fft, containers_fft, None,
@@ -261,10 +266,15 @@ def validate(model, vd_loader, beta, lmd, val_size,
             secrets, secrets_bin, covers = data[0][0].to(device), data[0][1].to(device), data[1].to(device)
             secrets = secrets.type(torch.cuda.FloatTensor)
             transcripts, text_prompts = data[2], data[3]
+            shift_sound = data[4]
 
             # Forward through the model
             # (B,N,T,2), (B,N,T,2), (B,L), (B,secret_len)
-            cover_fft, containers_fft, container_wav, revealed = model(secrets, covers, transcripts, text_prompts)
+            cover_fft, containers_fft, container_wav, revealed = model(secrets,
+                                                                       covers,
+                                                                       transcripts,
+                                                                       text_prompts,
+                                                                       shift_sound=shift_sound)
 
             # Visualize results
             if i == 0:

@@ -190,6 +190,10 @@ parser.add_argument("--dataset_i",
                     type=int,
                     choices=[0, 1],
                     default=0)
+parser.add_argument("--shift_ratio",
+                    type=float,
+                    default=0.1
+                    )
 
 if __name__ == '__main__':
     set_reproductibility()
@@ -205,7 +209,8 @@ if __name__ == '__main__':
         shuffle=True,
         num_points=args.num_points,
         dataset_i=args.dataset_i,
-        watermark_len=args.watermark_len
+        watermark_len=args.watermark_len,
+        shift_ratio=args.shift_ratio
     )
     test_loader = loader(
         set='test',
@@ -213,7 +218,8 @@ if __name__ == '__main__':
         shuffle=True,
         num_points=args.num_points,
         dataset_i=args.dataset_i,
-        watermark_len=args.watermark_len
+        watermark_len=args.watermark_len,
+        shift_ratio=args.shift_ratio
     )
 
     model = StegoUNet(

@@ -315,7 +315,8 @@ class StegoUNet(nn.Module):
         self.align = AlignmentLayer(self.num_points)
 
         # transform
-        self.transform_layer = lambda audio, data_dict: Transform.apply(audio, self.num_points, self.transform, data_dict)
+        self.transform_layer = lambda audio, data_dict: Transform.apply(audio, self.num_points, self.transform,
+                                                                        data_dict)
         if self.transform == "VC":
             print("Loading Voice Cloning model...")
             preload_models()
@@ -332,7 +333,7 @@ class StegoUNet(nn.Module):
         return torch.istft(signal_wmd_fft, n_fft=self.n_fft, hop_length=self.hop_length, window=window,
                            return_complex=False)
 
-    def forward(self, secret, cover, transcripts, text_prompts):
+    def forward(self, secret, cover, transcripts, text_prompts, shift_sound):
         # wavmark
 
         ## encode
@@ -355,15 +356,27 @@ class StegoUNet(nn.Module):
             transform_ct_wavs = []
             for i, (transcript, text_prompt) in enumerate(zip(transcripts, text_prompts)):
                 print(f"transcript: {transcript} <---> text_prompt: {text_prompt}")
-                transform_ct_wav_tmp = self.transform_layer(watermark_ct_wav[i][None,...],
-                                                           {"sample_rate": self.sr,
-                                                            "transcript": transcript,
-                                                            "text_prompt": text_prompt})
+                transform_ct_wav_tmp = self.transform_layer(watermark_ct_wav[i][None, ...],
+                                                            {"sample_rate": self.sr,
+                                                             "transcript": transcript,
+                                                             "text_prompt": text_prompt})
                 transform_ct_wavs.append(transform_ct_wav_tmp)
             transform_ct_wav = torch.cat(transform_ct_wavs, dim=0).to(watermark_ct_wav.device)
 
         else:
             transform_ct_wav = self.transform_layer(watermark_ct_wav, None)
+
+        ## shift
+        if shift_sound:
+            shift_idx = np.random.randint(0, 2)
+            shift_sound = shift_sound[shift_idx]
+            shift_len = shift_sound.size(1)
+            if shift_idx:
+                transform_ct_wav = torch.cat([transform_ct_wav[:, :-shift_len], shift_sound], dim=-1).to(
+                    transform_ct_wav.device)
+            else:
+                transform_ct_wav = torch.cat([shift_sound, transform_ct_wav[:, shift_len:]], dim=-1).to(
+                    transform_ct_wav.device)
 
         ## length alignment  TODO: handle unfixed length
         # transform_ct_wav = self.align(transform_ct_wav)

@@ -25,7 +25,7 @@ AUDIO_FOLDER = [f"{DATA_FOLDER}/LibrispeechVoiceClone_",
                 f"{DATA_FOLDER}/FSDnoisy/FSDnoisy18k.audio_"]
 
 
-def preprocess_audio(audio: str | torch.Tensor, num_points: int = 64000, padding="zeros"):
+def preprocess_audio(audio: str | torch.Tensor, num_points, shift_ratio: float, padding="zeros"):
     if isinstance(audio, str):
         sound, sr = torchaudio.load(audio)
     else:
@@ -36,20 +36,29 @@ def preprocess_audio(audio: str | torch.Tensor, num_points: int = 64000, padding
     if C > 1:
         raise NotImplemented("Can only handle sounds with over one channel")
     else:
-        if L < num_points:
-            # TODO: padding zeros or others like gaussian noise
-            if padding == "zeros":
+        shift_len = int(num_points * np.random.uniform(0, shift_ratio))
+        total_points = num_points + shift_len * 2
+        if L < total_points:
+            # simplify the situation
+            if L < num_points:
                 pad_vec = torch.zeros((sound.shape[0], num_points - L)).to(device)
-            elif padding == "gaussian":
-                pad_vec = torch.normal(0, 1e-4, (sound.shape[0], num_points - L)).to(device)
+                sound = torch.cat([sound, pad_vec], dim=-1)
             else:
-                raise ValueError("Invalid value of padding of preprocess_audio()")
-            sound = torch.cat([sound, pad_vec], dim=-1)
-        else:
-            sound = sound[:, :num_points]
+                sound = sound[:, :num_points]
 
-    sound = sound.squeeze(0)  # (L,)
-    return sound.to(device)
+            shift_left = torch.zeros((sound.shape[0], shift_len)).to(device)
+            shift_right = torch.zeros((sound.shape[0], shift_len)).to(device)
+        else:
+            shift_left = sound[:, :shift_len]
+            shift_right = sound[:, num_points + shift_len: num_points + shift_len * 2]
+            sound = sound[:, shift_len:num_points + shift_len]
+
+    sound = sound.squeeze(0).to(device)  # (L,)
+    if shift_len != 0:
+        shift_sound = [shift_left.squeeze(0).to(device), shift_right.squeeze(0).to(device)]
+    else:
+        shift_sound = []
+    return sound, shift_sound
 
 
 class StegoDataset(torch.utils.data.Dataset):
@@ -76,13 +85,15 @@ class StegoDataset(torch.utils.data.Dataset):
             audio_root_i: int,
             folder: str,
             num_points: int,
-            watermark_len: int
+            watermark_len: int,
+            shift_ratio: float
     ):
         self.audio_root_i = audio_root_i
         self.data_root = pathlib.Path(f"{AUDIO_FOLDER[self.audio_root_i]}{folder}")
         self.max_data_num = 50000 if folder == "train" else 3600
         self.num_points = num_points
         self.watermark_len = watermark_len
+        self.shift_ratio = shift_ratio
 
         # dataset 0
         if self.audio_root_i == 0:
@@ -92,7 +103,9 @@ class StegoDataset(torch.utils.data.Dataset):
 
             # default audio, transcript and text_prompt
             data_path = os.path.join(self.data_root, "0")
-            self.default_audio = preprocess_audio(os.path.join(data_path, "speech.wav"), num_points=self.num_points)
+            self.default_audio, self.shift_sound = preprocess_audio(os.path.join(data_path, "speech.wav"),
+                                                                    num_points=self.num_points,
+                                                                    shift_ratio=self.shift_ratio)
             with open(os.path.join(data_path, "text.txt"), "r") as f:
                 self.default_transcript = self.default_text_prompt = f.read()
             assert self.default_transcript != "" and self.default_text_prompt != ""
@@ -118,7 +131,9 @@ class StegoDataset(torch.utils.data.Dataset):
             # load cloned audio and its transcript
             data_index = self.data_index[index].item()
             data_path = os.path.join(self.data_root, str(data_index))
-            audio = preprocess_audio(os.path.join(data_path, "speech.wav"), num_points=self.num_points)
+            audio, shift_sound = preprocess_audio(os.path.join(data_path, "speech.wav"),
+                                                  num_points=self.num_points,
+                                                  shift_ratio=self.shift_ratio)
             with open(os.path.join(data_path, "text.txt"), "r") as f:
                 transcript = f.read()
             if transcript == "":
@@ -138,17 +153,19 @@ class StegoDataset(torch.utils.data.Dataset):
         elif self.audio_root_i == 1:
             data_index = self.data_index[index].item()
             data_path = os.path.join(self.data_root, self.audio_names[data_index])
-            audio = preprocess_audio(os.path.join(data_path), num_points=self.num_points)
+            audio, shift_sound = preprocess_audio(os.path.join(data_path),
+                                                  num_points=self.num_points,
+                                                  shift_ratio=self.shift_ratio)
 
         # generate watermark
         # torch.manual_seed(rand_seq_seed)
         sequence = torch.rand(self.watermark_len)  # (secret_len,)
         sequence_binary = (sequence > 0.5).int()
 
-        return (sequence, sequence_binary), audio, transcript, text_prompt
+        return (sequence, sequence_binary), audio, transcript, text_prompt, shift_sound
 
 
-def loader(set, num_points, batch_size, shuffle, watermark_len, dataset_i):
+def loader(set, num_points, batch_size, shuffle, watermark_len, dataset_i, shift_ratio):
     """
     Prepares the custom dataloader.
     - [set] defines the set type. Can be either [train] or [test].
@@ -163,7 +180,8 @@ def loader(set, num_points, batch_size, shuffle, watermark_len, dataset_i):
         audio_root_i=dataset_i,
         folder=set,
         num_points=num_points,
-        watermark_len=watermark_len
+        watermark_len=watermark_len,
+        shift_ratio=shift_ratio
     )
 
     print('Dataset prepared.')
