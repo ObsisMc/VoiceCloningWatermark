@@ -390,18 +390,22 @@ class StegoUNet(nn.Module):
 
         ## direct connect
         # sign_fft_real = signal_wmd_fft_real
-        
 
         watermark_fft_real = sign_fft_real  # obsismc: different from what the paper says
-        _, message_restored_fft_real = self.enc_dec(sign_fft_real, watermark_fft_real, rev=True)
+        audio_restored_fft_real, message_restored_fft_real = self.enc_dec(sign_fft_real, watermark_fft_real, rev=True)
+
+        audio_restored_fft = torch.view_as_complex(audio_restored_fft_real.contiguous())
+        audio_restored = self.istft(audio_restored_fft)
+
         message_restored_fft = torch.view_as_complex(message_restored_fft_real.contiguous())
         message_restored_expanded = self.istft(message_restored_fft)
         revealed = self.watermark_fc_back(message_restored_expanded)
         revealed = torch.sigmoid(revealed)
 
+        # useless
         return_ct_fft = cover_fft_real
 
-        return cover_fft_real, return_ct_fft, watermark_ct_wav, revealed
+        return cover_fft_real, return_ct_fft, watermark_ct_wav, revealed, audio_restored
 
     def enc_dec(self, signal, watermark, rev):
         signal = signal.permute(0, 3, 2, 1)

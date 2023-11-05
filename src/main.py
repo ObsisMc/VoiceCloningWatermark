@@ -51,6 +51,18 @@ parser.add_argument('--lam',
                         metavar='DOUBLE',
                         help='Lambda hyperparameter'
                     )
+parser.add_argument('--alpha',
+                        type=float,
+                        default=1,
+                        metavar='DOUBLE',
+                        help='Alpha hyperparameter'
+                    )
+parser.add_argument('--gamma',
+                        type=float,
+                        default=1,
+                        metavar='DOUBLE',
+                        help='Gamma hyperparameter'
+                    )
 parser.add_argument('--dtw',
                         type=parse_keyword,
                         default=False,
@@ -250,6 +262,8 @@ if __name__ == '__main__':
         vd_loader=test_loader,
         beta=args.beta,
         lam=args.lam,
+        alpha=args.alpha,
+        gamma=args.gamma,
         lr=args.lr,
         epochs=args.num_epochs,
         val_itvl=args.val_itvl,

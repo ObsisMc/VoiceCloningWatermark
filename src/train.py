@@ -29,7 +29,8 @@ def save_checkpoint(state, is_best, filename=os.path.join(os.environ.get('OUT_PA
         print("=> Loss did not improve")
 
 
-def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, val_size=50, prev_epoch=None, prev_i=None,
+def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, val_itvl=500, val_size=50,
+          prev_epoch=None, prev_i=None,
           summary=None, slide=1, experiment=0, transform='cosine', stft_small=True, ft_container='mag', thet=0,
           dtw=False):
     # Initialize wandb logs
@@ -69,6 +70,8 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
     # Initialize waveform loss constructor
     criterion_audio = nn.MSELoss()
     criterion_watermark = nn.MSELoss()
+    criterion_restore_audio = nn.MSELoss()
+    criterion_contrast = nn.TripletMarginLoss()
     criterion_audio_name = criterion_audio.__class__.__name__[
                            :re.search("(?=Loss)", criterion_audio.__class__.__name__).span()[0]]
     criterion_wm_name = criterion_watermark.__class__.__name__[
@@ -86,14 +89,16 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
         # if prev_epoch != None and epoch < prev_epoch - 1: continue  # Checkpoint pass
 
         # Initialize training metrics storage
-        train_loss, train_audio_loss, train_watermark_loss, train_snr, train_ber = [], [], [], [], []
-        vd_loss, vd_audio_loss, vd_watermark_loss, vd_snr, vd_ber = [], [], [], [], []
+        train_loss, train_audio_loss, train_watermark_loss, train_restore_audio_loss, train_contrast_loss, train_snr, train_ber = [], [], [], [], [], [], []
+        vd_loss, vd_audio_loss, vd_watermark_loss, vd_restore_audio_loss, vd_contrast_loss, vd_snr, vd_ber = [], [], [], [], [], [], []
 
         # Print headers for the losses
         print()
         print(f' Iter.     Time  '
               f'Tr. Loss '
               f' Au. {criterion_audio_name:3} '
+              f'rAu. MSE '
+              f'rAu. Tri '
               f' Wm. {criterion_wm_name:3} '
               f' Au. SNR '
               f' Wm. BER ')
@@ -115,18 +120,20 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
 
             # Forward through the model
             # (B,N,T,C), (B,N,T,C), (B,L), (B,secret_len)
-            cover_fft, containers_fft, container_wav, revealed = model(secrets,
-                                                                       covers,
-                                                                       transcripts,
-                                                                       text_prompts,
-                                                                       shift_sound=shift_sound)
+            cover_fft, containers_fft, container_wav, revealed, audio_revealed = model(secrets,
+                                                                                       covers,
+                                                                                       transcripts,
+                                                                                       text_prompts,
+                                                                                       shift_sound=shift_sound)
 
             # loss
             # loss, loss_cover, loss_secret, loss_spectrum = StegoLoss(secrets, cover_fft, containers_fft, None,
             #                                                          revealed, beta)
             loss_watermark = criterion_watermark(revealed, secrets)
             loss_audio = criterion_audio(covers, container_wav)
-            loss_total = beta * loss_watermark + lam * loss_audio
+            loss_restore_audio = criterion_restore_audio(covers, audio_revealed)
+            loss_contrast = criterion_contrast(audio_revealed, covers, container_wav)
+            loss_total = beta * loss_watermark + lam * loss_audio + alpha * loss_restore_audio + gamma * loss_contrast
 
             with torch.autograd.set_detect_anomaly(True):
                 loss_total.backward()
@@ -139,6 +146,8 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
             # Append and average the new losses
             train_loss.append(loss_total.detach().item())
             train_audio_loss.append(loss_audio.detach().item())
+            train_restore_audio_loss.append(loss_restore_audio.detach().item())
+            train_contrast_loss.append(loss_contrast.detach().item())
             train_watermark_loss.append(loss_watermark.detach().item())
             train_snr.append(snr_audio)
             train_ber.append(ber.item())
@@ -146,6 +155,8 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
             print(f"(#{i:4})[{np.round(time.time() - ini):5} s] "
                   f"{train_loss[-1]:8.4f} "
                   f"{train_audio_loss[-1]:8.4f} "
+                  f"{train_restore_audio_loss[-1]:8.4f} "
+                  f"{train_contrast_loss[-1]:8.4f} "
                   f"{train_watermark_loss[-1]:8.4f} "
                   f"{train_snr[-1]:8.4f} "
                   f"{train_ber[-1]:8.4f}")
@@ -154,6 +165,8 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
             wandb.log({
                 'iter_tr_loss': train_loss[-1],
                 'iter_tr_audio_loss': train_audio_loss[-1],
+                'iter_tr_restore_audio_loss': train_restore_audio_loss[-1],
+                'iter_tr_contrast_loss': train_contrast_loss[-1],
                 'iter_tr_watermark_loss': train_watermark_loss[-1],
                 'iter_tr_SNR': train_snr[-1],
                 'iter_tr_BER': train_ber[-1]
@@ -161,12 +174,16 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
 
             # Every 'val_itvl' iterations or at the end of epoch, do a validation step
             if (i % val_itvl == 0) and (i != 0) or i == len(tr_loader) - 1:
-                valid_loss, valid_audio_loss, valid_watermark_loss, valid_snr, valid_ber = validate(
-                    model, vd_loader, beta=beta, lmd=lam, val_size=val_size,
-                    audio_criterion=criterion_audio, wm_criterion=criterion_watermark, tr_i=i, epoch=epoch)
+                valid_loss, valid_audio_loss, valid_watermark_loss, valid_snr, valid_ber, valid_rst_loss, valid_cts_loss = validate(
+                    model, vd_loader, beta=beta, lmd=lam, alpha=alpha, gamma=gamma, val_size=val_size,
+                    audio_criterion=criterion_audio, wm_criterion=criterion_watermark,
+                    rst_audio_criterion=criterion_restore_audio, contrast_criterion=criterion_contrast,
+                    tr_i=i, epoch=epoch)
 
                 vd_loss.append(valid_loss)
                 vd_audio_loss.append(valid_audio_loss)
+                vd_restore_audio_loss.append(valid_rst_loss)
+                vd_contrast_loss.append(valid_cts_loss)
                 vd_watermark_loss.append(valid_watermark_loss)
                 vd_snr.append(valid_snr)
                 vd_ber.append(valid_ber)
@@ -190,11 +207,15 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
                     'i': i + 1,
                     'tr_loss': train_loss,
                     'tr_audio_loss': train_audio_loss,
+                    'tr_restore_audio_loss': train_restore_audio_loss,
+                    'tr_contrast_loss': train_contrast_loss,
                     'tr_watermark_loss': train_watermark_loss,
                     'tr_snr': train_snr,
                     'tr_ber': train_ber,
                     'vd_loss': vd_loss,
                     'vd_audio_loss': vd_audio_loss,
+                    'vd_restore_audio_loss': vd_restore_audio_loss,
+                    'vd_contrast_loss': vd_contrast_loss,
                     'vd_watermark_loss': vd_watermark_loss,
                     'vd_snr': vd_snr,
                     'vd_ber': vd_ber,
@@ -209,6 +230,8 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
                 print(f' Iter.     Time  '
                       f'Tr. Loss '
                       f' Au. {criterion_audio_name:3} '
+                      f'rAu. MSE '
+                      f'rAu. Tri '
                       f' Wm. {criterion_wm_name:3} '
                       f' Au. SNR '
                       f' Wm. BER ')
@@ -216,6 +239,8 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
         # Print average training results after every epoch
         train_loss_avg = np.mean(train_loss)
         train_audio_loss_avg = np.mean(train_audio_loss)
+        train_restore_audio_loss_avg = np.mean(train_restore_audio_loss)
+        train_contrast_loss_avg = np.mean(train_contrast_loss)
         train_watermark_loss_avg = np.mean(train_watermark_loss)
         train_snr_avg = np.mean(train_snr)
         train_ber_avg = np.mean(train_ber)
@@ -224,12 +249,16 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
         print(f'Epoch average:      '
               f'Tr. Loss '
               f' Au. {criterion_audio_name:3} '
+              f'rAu. MSE '
+              f'rAu. Tri '
               f' Wm. {criterion_wm_name:3} '
               f' Au. SNR '
               f' Wm. BER ')
         print(f'Epoch {epoch:2}/{epochs:2}:        '
               f"{train_loss_avg:8.4f} "
               f"{train_audio_loss_avg:8.4f} "
+              f"{train_restore_audio_loss_avg:8.4f} "
+              f"{train_contrast_loss_avg:8.4f} "
               f"{train_watermark_loss_avg:8.4f} "
               f"{train_snr_avg:8.4f} "
               f"{train_ber_avg:8.4f}")
@@ -239,6 +268,8 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
         wandb.log({
             'epoch_tr_loss': train_loss_avg,
             'epoch_tr_audio_loss': train_audio_loss_avg,
+            'epoch_tr_restore_audio_loss': train_restore_audio_loss_avg,
+            'epoch_tr_contrast_loss': train_contrast_loss_avg,
             'epoch_tr_watermark_loss': train_watermark_loss_avg,
             'epoch_tr_SNR': train_snr_avg,
             'epoch_tr_BER': train_ber_avg,
@@ -250,8 +281,8 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
     return model, train_loss_avg
 
 
-def validate(model, vd_loader, beta, lmd, val_size,
-             audio_criterion, wm_criterion, epoch=None, tr_i=None):
+def validate(model, vd_loader, beta, lmd, alpha, gamma, val_size,
+             audio_criterion, wm_criterion, rst_audio_criterion, contrast_criterion, epoch=None, tr_i=None):
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -264,7 +295,7 @@ def validate(model, vd_loader, beta, lmd, val_size,
     # Set to evaluation mode
     model.eval()
 
-    valid_loss, valid_audio_loss, valid_watermark_loss, valid_snr, valid_ber = [], [], [], [], []
+    valid_loss, valid_audio_loss, valid_rst_audio_loss, valid_contrast_loss, valid_watermark_loss, valid_snr, valid_ber = [], [], [], [], [], [], []
 
     # Start validating ...
     with torch.no_grad():
@@ -282,11 +313,11 @@ def validate(model, vd_loader, beta, lmd, val_size,
 
             # Forward through the model
             # (B,N,T,2), (B,N,T,2), (B,L), (B,secret_len)
-            cover_fft, containers_fft, container_wav, revealed = model(secrets,
-                                                                       covers,
-                                                                       transcripts,
-                                                                       text_prompts,
-                                                                       shift_sound=shift_sound)
+            cover_fft, containers_fft, container_wav, revealed, audio_revealed = model(secrets,
+                                                                                       covers,
+                                                                                       transcripts,
+                                                                                       text_prompts,
+                                                                                       shift_sound=shift_sound)
 
             # Visualize results
             if i == 0:
@@ -296,7 +327,9 @@ def validate(model, vd_loader, beta, lmd, val_size,
             # Compute the loss
             loss_watermark = wm_criterion(revealed, secrets)
             loss_audio = audio_criterion(covers, container_wav)
-            loss_total = beta * loss_watermark + lmd * loss_audio
+            loss_rst_audio = rst_audio_criterion(covers, audio_revealed)
+            loss_contrast = contrast_criterion(audio_revealed, covers, container_wav)
+            loss_total = beta * loss_watermark + lmd * loss_audio + alpha * loss_rst_audio + gamma * loss_contrast
 
             # Compute audio metrics
             vd_snr_audio = batch_signal_noise_ratio(covers, container_wav)
@@ -304,6 +337,8 @@ def validate(model, vd_loader, beta, lmd, val_size,
 
             valid_loss.append(loss_total.detach().item())
             valid_audio_loss.append(loss_audio.detach().item())
+            valid_rst_audio_loss.append(loss_rst_audio.detach().item())
+            valid_contrast_loss.append(loss_contrast.detach().item())
             valid_watermark_loss.append(loss_watermark.detach().item())
             valid_snr.append(vd_snr_audio)
             valid_ber.append(ber.item())
@@ -313,13 +348,17 @@ def validate(model, vd_loader, beta, lmd, val_size,
 
         avg_valid_loss = np.mean(valid_loss)
         avg_valid_audio_loss = np.mean(valid_audio_loss)
+        avg_valid_rst_audio_loss = np.mean(valid_rst_audio_loss)
+        avg_valid_contrast_loss = np.mean(valid_contrast_loss)
         avg_valid_watermark_loss = np.mean(valid_watermark_loss)
         avg_valid_snr = np.mean(valid_snr)
         avg_valid_ber = np.mean(valid_ber)
 
         wandb.log({
             'vd_loss': avg_valid_loss,
-            'vd_cover_loss': avg_valid_audio_loss,
+            'vd_audio_loss': avg_valid_audio_loss,
+            'vd_restore_audio_loss': avg_valid_rst_audio_loss,
+            'vd_contrast_loss': avg_valid_contrast_loss,
             'vd_watermark_loss': avg_valid_watermark_loss,
             'vd_SNR': avg_valid_snr,
             'vd_BER': avg_valid_ber
@@ -327,6 +366,8 @@ def validate(model, vd_loader, beta, lmd, val_size,
 
     del valid_loss
     del valid_audio_loss
+    del valid_rst_audio_loss
+    del valid_contrast_loss
     del valid_watermark_loss
     del valid_snr
     del valid_ber
@@ -337,12 +378,16 @@ def validate(model, vd_loader, beta, lmd, val_size,
     print(f'Validation avg:    '
           f'Val. Loss'
           f' Au. Loss'
+          f' rAu.Loss'
+          f' rAu.TriL'
           f' Wm. Loss'
           f'      SNR'
           f'      BER')
     print(f'                    '
           f'{avg_valid_loss:8.4f} '
           f'{avg_valid_audio_loss:8.4f} '
+          f'{avg_valid_rst_audio_loss:8.4f} '
+          f'{avg_valid_contrast_loss:8.4f} '
           f'{avg_valid_watermark_loss:8.4f} '
           f'{avg_valid_snr:8.4f} '
           f'{avg_valid_ber:8.4f} ')
@@ -351,4 +396,4 @@ def validate(model, vd_loader, beta, lmd, val_size,
     # Reset model to training mode
     model.train()
 
-    return avg_valid_loss, avg_valid_audio_loss, avg_valid_watermark_loss, avg_valid_snr, avg_valid_ber
+    return avg_valid_loss, avg_valid_audio_loss, avg_valid_watermark_loss, avg_valid_snr, avg_valid_ber, avg_valid_rst_audio_loss, avg_valid_contrast_loss
