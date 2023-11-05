@@ -33,7 +33,7 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
           summary=None, slide=1, experiment=0, transform='cosine', stft_small=True, ft_container='mag', thet=0,
           dtw=False):
     # Initialize wandb logs
-    wandb.init(project='PixInWavRGB')
+    wandb.init(project='WavmarkReproduce')
     if summary is not None:
         wandb.run.name = summary
         wandb.run.save()
@@ -59,9 +59,15 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
 
     # Set optimizer
     optimizer = optim.Adam(model.parameters(), lr=lr)
+    # optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=lr)
+    # optimizer = optim.Adam([{"params": model.watermark_fc.parameters(), "lr": lr / 1e1},
+    #                         {"params": model.hinet.parameters(), "lr": lr / 1e1},
+    #                         {"params": model.hinet_r.parameters(), "lr": lr},
+    #                         {"params": model.watermark_fc_back.parameters(), "lr": lr}],
+    #                        lr=lr)
 
     # Initialize waveform loss constructor
-    criterion_audio = nn.L1Loss()
+    criterion_audio = nn.MSELoss()
     criterion_watermark = nn.MSELoss()
     criterion_audio_name = criterion_audio.__class__.__name__[
                            :re.search("(?=Loss)", criterion_audio.__class__.__name__).span()[0]]
@@ -100,7 +106,10 @@ def train(model, tr_loader, vd_loader, beta, lam, lr, epochs=5, val_itvl=500, va
             secrets, secrets_bin, covers = data[0][0].to(device), data[0][1].to(device), data[1].to(device)
             secrets = secrets.type(torch.cuda.FloatTensor)
             transcripts, text_prompts = data[2], data[3]
-            shift_sound = data[4].to(device)
+            if data[4]:
+                shift_sound = [data[4][0].to(device), data[4][1].to(device)]
+            else:
+                shift_sound = data[4]
 
             optimizer.zero_grad()
 
@@ -266,7 +275,10 @@ def validate(model, vd_loader, beta, lmd, val_size,
             secrets, secrets_bin, covers = data[0][0].to(device), data[0][1].to(device), data[1].to(device)
             secrets = secrets.type(torch.cuda.FloatTensor)
             transcripts, text_prompts = data[2], data[3]
-            shift_sound = data[4]
+            if data[4]:
+                shift_sound = [data[4][0].to(device), data[4][1].to(device)]
+            else:
+                shift_sound = data[4]
 
             # Forward through the model
             # (B,N,T,2), (B,N,T,2), (B,L), (B,secret_len)

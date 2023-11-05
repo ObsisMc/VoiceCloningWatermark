@@ -369,7 +369,7 @@ class StegoUNet(nn.Module):
 
         ## shift
         if shift_sound:
-            shift_idx = np.random.randint(0, 2)
+            shift_idx = 1
             shift_sound = shift_sound[shift_idx]
             shift_len = int(self.num_points * np.random.uniform(0, self.shift_ratio))
 

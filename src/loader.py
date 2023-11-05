@@ -102,7 +102,7 @@ class StegoDataset(torch.utils.data.Dataset):
             self.data_index = torch.randperm(total_data_num)[:self.max_data_num]
 
             # default audio, transcript and text_prompt
-            data_path = os.path.join(self.data_root, "0")
+            data_path = os.path.join(self.data_root, "1000")
             self.default_audio, self.shift_sound = preprocess_audio(
                 os.path.join(data_path, "speech.wav"),
                 num_points=self.num_points,
@@ -143,6 +143,11 @@ class StegoDataset(torch.utils.data.Dataset):
                 shift_sound = self.shift_sound
                 print(f"Sample {data_index} has empty text")
 
+
+            # audio = self.default_audio
+            # transcript = self.default_transcript
+            # shift_sound = self.shift_sound
+
             # load text_prompt
             text_prompt_index = torch.randint(len(self), (1,)).item()
             text_prompt_path = os.path.join(self.data_root, str(text_prompt_index))
@@ -151,6 +156,7 @@ class StegoDataset(torch.utils.data.Dataset):
             if text_prompt == "":
                 text_prompt = self.default_text_prompt
                 print(f"Sample {text_prompt_index} has empty text")
+            text_prompt = "Test Voice Cloning"
 
         elif self.audio_root_i == 1:
             data_index = self.data_index[index].item()
