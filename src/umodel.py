@@ -249,13 +249,13 @@ class Transform(torch.autograd.Function):
             wav = wav[:, :int(num_points * alpha / 10)]
         elif name == "RS":  # resample to make it longer
             alpha = torch.rand(1) * 1. + 0.5
-            #wav = torch.from_numpy(
+            # wav = torch.from_numpy(
             #    librosa.resample(
             #        wav.detach().cpu().numpy(), orig_sr=num_points, target_sr=int(num_points * alpha.item())
             #    )
-            #).float().to(wav.device)
+            # ).float().to(wav.device)
             # wav = torchaudio.functional.resample(wav, num_points, int(num_points * alpha.item()))
-            wav =torchaudio.transforms.Resample(num_points, int(num_points * alpha.item())).to(device)(wav)
+            wav = torchaudio.transforms.Resample(num_points, int(num_points * alpha.item())).to(device)(wav)
         # TODO: add noise
         elif name == "NS":
             noise = torch.normal(0, 1e-4, (wav.size(0), wav.size(1))).to(device)
@@ -273,6 +273,13 @@ class Transform(torch.autograd.Function):
                                            text_tokens=text_tokens, lang_pr=lang_pr)
 
             wav = wav.detach().clone().unsqueeze(0).to(device)
+        elif name == "WM":
+            wm_model, wm_len = data_dict["model"], data_dict["watermark_len"]
+            wm = torch.rand(wm_len).repeat(wav.size(0), 1).to(device)
+            with torch.no_grad():
+                wav_encode = wm_model.encode(wm, wav)
+                _, wav_decode = model.decode(wav_encode)
+            wav = wav_decode
         else:
             raise ValueError("Invalid transform name")
 
@@ -291,7 +298,7 @@ class Transform(torch.autograd.Function):
 
 class StegoUNet(nn.Module):
     def __init__(self, transform, num_points, n_fft, hop_length,
-                 mag, num_layers, watermark_len, shift_ratio):
+                 mag, num_layers, watermark_len, shift_ratio, **kwargs):
         assert mag == False and num_layers > 0
 
         super().__init__()
@@ -323,6 +330,11 @@ class StegoUNet(nn.Module):
             print("Loading Voice Cloning model...")
             preload_models()
             print("Finish loading!")
+        elif self.transform == "WM":
+            self.transform_layer = lambda audio, data_dict: Transform.apply(audio, self.num_points, self.transform,
+                                                                 {"model": kwargs["WM_model"],
+                                                                  "watermark_len": self.watermark_len})
+
 
     def stft(self, data, return_complex=True):
         window = torch.hann_window(self.n_fft).to(data.device)
@@ -357,10 +369,10 @@ class StegoUNet(nn.Module):
             transform_ct_wavs = []
             for i, (transcript, text_prompt) in enumerate(zip(transcripts, text_prompts)):
                 # print(f"transcript: {transcript} <---> text_prompt: {text_prompt}")
-                transform_ct_wav_tmp = self.transform_layer(watermark_ct_wav[i][None,...],
-                                                           {"sample_rate": self.sr,
-                                                            "transcript": transcript,
-                                                            "text_prompt": text_prompt})
+                transform_ct_wav_tmp = self.transform_layer(watermark_ct_wav[i][None, ...],
+                                                            {"sample_rate": self.sr,
+                                                             "transcript": transcript,
+                                                             "text_prompt": text_prompt})
                 transform_ct_wavs.append(transform_ct_wav_tmp)
             transform_ct_wav = torch.cat(transform_ct_wavs, dim=0).to(watermark_ct_wav.device)
 
@@ -377,10 +389,10 @@ class StegoUNet(nn.Module):
                 transform_ct_wav = torch.cat([transform_ct_wav[:, shift_len:], shift_sound[:, :shift_len]], dim=-1).to(
                     transform_ct_wav.device)
             else:
-                transform_ct_wav = torch.cat([shift_sound[:, self.shift_max_len-shift_len:], transform_ct_wav[:, :self.shift_max_len-shift_len]], dim=-1).to(
+                transform_ct_wav = torch.cat([shift_sound[:, self.shift_max_len - shift_len:],
+                                              transform_ct_wav[:, :self.shift_max_len - shift_len]], dim=-1).to(
                     transform_ct_wav.device)
 
-        
         ## length alignment  TODO: handle unfixed length
         # transform_ct_wav = self.align(transform_ct_wav)
 
@@ -391,16 +403,17 @@ class StegoUNet(nn.Module):
         ## direct connect
         # sign_fft_real = signal_wmd_fft_real
 
+        # reveal watermark and original audio
         watermark_fft_real = sign_fft_real  # obsismc: different from what the paper says
         audio_restored_fft_real, message_restored_fft_real = self.enc_dec(sign_fft_real, watermark_fft_real, rev=True)
-
-        audio_restored_fft = torch.view_as_complex(audio_restored_fft_real.contiguous())
-        audio_restored = self.istft(audio_restored_fft)
 
         message_restored_fft = torch.view_as_complex(message_restored_fft_real.contiguous())
         message_restored_expanded = self.istft(message_restored_fft)
         revealed = self.watermark_fc_back(message_restored_expanded)
         revealed = torch.sigmoid(revealed)
+
+        audio_restored_fft = torch.view_as_complex(audio_restored_fft_real.contiguous())
+        audio_restored = self.istft(audio_restored_fft)
 
         # useless
         return_ct_fft = cover_fft_real
@@ -436,12 +449,19 @@ class StegoUNet(nn.Module):
         signal_fft = self.stft(audio)
         sign_fft_real = torch.view_as_real(signal_fft)
         watermark_fft_real = sign_fft_real  # obsismc: different from what the paper says
-        _, message_restored_fft_real = self.enc_dec(sign_fft_real, watermark_fft_real, rev=True)
+        audio_restored_fft_real, message_restored_fft_real = self.enc_dec(sign_fft_real, watermark_fft_real, rev=True)
+
+        # restored watermark
         message_restored_fft = torch.view_as_complex(message_restored_fft_real.contiguous())
         message_restored_expanded = self.istft(message_restored_fft)
         revealed = self.watermark_fc_back(message_restored_expanded)
         revealed = torch.sigmoid(revealed)
-        return revealed
+
+        # restored audio
+        audio_restored_fft = torch.view_as_complex(audio_restored_fft_real.contiguous())
+        audio_restored = self.istft(audio_restored_fft)
+
+        return revealed, audio_restored
 
 
 class AlignmentLayer(nn.Module):
