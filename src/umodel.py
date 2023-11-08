@@ -11,6 +11,7 @@ umodel.py
 * Main net: StegoUNet
 '''
 
+import os
 import torch
 import librosa
 import numpy as np
@@ -278,7 +279,7 @@ class Transform(torch.autograd.Function):
             wm = torch.rand(wm_len).repeat(wav.size(0), 1).to(device)
             with torch.no_grad():
                 wav_encode = wm_model.encode(wm, wav)
-                _, wav_decode = model.decode(wav_encode)
+                _, wav_decode = wm_model.decode(wav_encode)
             wav = wav_decode
         else:
             raise ValueError("Invalid transform name")
@@ -331,10 +332,15 @@ class StegoUNet(nn.Module):
             preload_models()
             print("Finish loading!")
         elif self.transform == "WM":
+            wm_len = 16
+            ckpt_path = f"1-multi_IDwl{wm_len}lr1e-4audioMSElam100/30-1-multi_IDwl16lr1e-4audioMSElam100.pt"
+            state_dict = torch.load(os.path.join(os.environ.get('OUT_PATH'), ckpt_path))["state_dict"]
+            self.wm_model = StegoUNet("ID", self.num_points, self.n_fft, self.hop_length, False, self.num_layers,
+                                      wm_len, 0)
+            self.wm_model.load_state_dict(state_dict)
             self.transform_layer = lambda audio, data_dict: Transform.apply(audio, self.num_points, self.transform,
-                                                                 {"model": kwargs["WM_model"],
-                                                                  "watermark_len": self.watermark_len})
-
+                                                                            {"model": self.wm_model,
+                                                                             "watermark_len": self.watermark_len})
 
     def stft(self, data, return_complex=True):
         window = torch.hann_window(self.n_fft).to(data.device)
