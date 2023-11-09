@@ -16,6 +16,7 @@ import torch.optim as optim
 from src.losses import ssim, SNR, PSNR, StegoLoss, calc_ber, signal_noise_ratio, batch_signal_noise_ratio, \
     batch_calc_ber
 from src.visualization import viz2paper, viz4seq
+from src.umodel import StegoUNet
 import re
 
 
@@ -77,10 +78,21 @@ def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, va
     criterion_wm_name = criterion_watermark.__class__.__name__[
                         :re.search("(?=Loss)", criterion_watermark.__class__.__name__).span()[0]]
 
+    # load watermark model as attacker
+    wm_len = 16
+    # ckpt_path = f"1-multi_IDwl{wm_len}lr1e-4audioMSElam100/30-1-multi_IDwl16lr1e-4audioMSElam100.pt"
+    ckpt_path = f"1-multi_WMwl{wm_len}lr1e-4audioMSElam100/18-1-multi_WMwl{wm_len}lr1e-4audioMSElam100.pt"
+    state_dict = torch.load(os.path.join(os.environ.get('OUT_PATH'), ckpt_path))["state_dict"]
+    wm_model = StegoUNet("ID", model.num_points, model.n_fft, model.hop_length, False, model.num_layers,
+                         wm_len, 0)
+    wm_model.load_state_dict(state_dict, strict=False)
+    wm_model.to(device)
+
     # Initialize best val
     best_loss = np.inf
     best_snr = - np.inf
     ber_threshold = 1 / 32 / 2
+    best_state_dict = None
 
     # Start training ...
     ini = time.time()
@@ -124,7 +136,8 @@ def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, va
                                                                                        covers,
                                                                                        transcripts,
                                                                                        text_prompts,
-                                                                                       shift_sound=shift_sound)
+                                                                                       shift_sound=shift_sound,
+                                                                                       wm_model=wm_model)
 
             # loss
             # loss, loss_cover, loss_secret, loss_spectrum = StegoLoss(secrets, cover_fft, containers_fft, None,
@@ -178,7 +191,7 @@ def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, va
                     model, vd_loader, beta=beta, lmd=lam, alpha=alpha, gamma=gamma, val_size=val_size,
                     audio_criterion=criterion_audio, wm_criterion=criterion_watermark,
                     rst_audio_criterion=criterion_restore_audio, contrast_criterion=criterion_contrast,
-                    tr_i=i, epoch=epoch)
+                    tr_i=i, epoch=epoch,wm_model=wm_model)
 
                 vd_loss.append(valid_loss)
                 vd_audio_loss.append(valid_audio_loss)
@@ -196,6 +209,8 @@ def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, va
                 print(f"Current best -> best loss:{best_loss}, best snr: {best_snr}")
                 best_loss = min(best_loss, valid_loss)
                 best_snr = max(best_snr, valid_snr)
+                if is_best:
+                    best_state_dict = model.state_dict()
 
                 # Save checkpoint if is a new best
                 save_checkpoint({
@@ -235,6 +250,11 @@ def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, va
                       f' Wm. {criterion_wm_name:3} '
                       f' Au. SNR '
                       f' Wm. BER ')
+
+        # update attacker
+        if epoch > 10:
+            print(f"Updating watermarking model attacker")
+            wm_model.load_state_dict(best_state_dict, strict=False)
 
         # Print average training results after every epoch
         train_loss_avg = np.mean(train_loss)
@@ -282,7 +302,8 @@ def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, va
 
 
 def validate(model, vd_loader, beta, lmd, alpha, gamma, val_size,
-             audio_criterion, wm_criterion, rst_audio_criterion, contrast_criterion, epoch=None, tr_i=None):
+             audio_criterion, wm_criterion, rst_audio_criterion, contrast_criterion, epoch=None, tr_i=None,
+             **kwargs):
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -317,7 +338,8 @@ def validate(model, vd_loader, beta, lmd, alpha, gamma, val_size,
                                                                                        covers,
                                                                                        transcripts,
                                                                                        text_prompts,
-                                                                                       shift_sound=shift_sound)
+                                                                                       shift_sound=shift_sound,
+                                                                                       wm_model=kwargs["wm_model"])
 
             # Visualize results
             if i == 0:

@@ -54,190 +54,6 @@ def magphase2spec(mag: torch.Tensor, phase: torch.Tensor):
     return torch.cat([r, i], dim=-1).to(mag.device)
 
 
-class DoubleConv(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            # nn.BatchNorm2d(out_channels),
-            nn.LeakyReLU(0.8, inplace=True),
-        )
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-            # nn.BatchNorm2d(out_channels),
-            nn.LeakyReLU(0.8, inplace=True),
-        )
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.conv2(x)
-        return x
-
-
-class Down(nn.Module):
-
-    def __init__(self, in_channels, out_channels, downsample_factor=4):
-        super().__init__()
-
-        self.conv = DoubleConv(in_channels, out_channels)
-        self.down = nn.MaxPool2d(downsample_factor)
-
-    def forward(self, x):
-        x = self.conv(x)
-        x = self.down(x)
-        return x
-
-
-class Up(nn.Module):
-
-    def __init__(self, in_channels, out_channels, opp_channels=-1):
-        # opp_channels -> The number of channels (depth) of the opposite replica of the unet
-        #                   If -1, the same number as the current image is assumed
-        super().__init__()
-        self.up = nn.Sequential(
-            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2, output_padding=0),
-            nn.LeakyReLU(0.8, inplace=True),
-            nn.ConvTranspose2d(out_channels, out_channels, kernel_size=2, stride=2, output_padding=0),
-            nn.LeakyReLU(0.8, inplace=True),
-        )
-        if opp_channels == -1:
-            opp_channels = out_channels
-        self.conv = DoubleConv(opp_channels + out_channels, out_channels)
-
-    def forward(self, mix, im_opposite, au_opposite=None):
-        mix = self.up(mix)
-        # print(f"up layer: {mix.shape}")
-        x = torch.cat((mix, im_opposite), dim=1)
-        return self.conv(x)
-
-
-class PrepHidingNet(nn.Module):
-    def __init__(self, transform='cosine', stft_small=True, embed='stretch', secrete_len=32, num_points=64000,
-                 n_fft=1000, hop_length=400, mag=False):
-        super(PrepHidingNet, self).__init__()
-        self._transform = transform
-        self._stft_small = stft_small
-        self.embed = embed
-        self._secrete_len = secrete_len
-        self.num_points = num_points
-        self.n_fft = n_fft
-        self.hop_length = hop_length
-        self.mag = mag
-
-        self.fc = nn.Linear(self._secrete_len, self.num_points)  # TODO: may be optimized
-        # self.im_encoder_layers = nn.ModuleList([
-        #     Down(1 + (not self.mag), 64),
-        #     Down(64, 64 * 2)
-        # ])
-        # self.im_decoder_layers = nn.ModuleList([
-        #     Up(64 * 2, 64),
-        #     Up(64, 1 + (not self.mag))
-        # ])
-        self.subnet = ResidualDenseBlock_out(2, 2)
-
-    def stft(self, data):
-        window = torch.hann_window(self.n_fft).to(data.device)
-        tmp = torch.stft(data, n_fft=self.n_fft, hop_length=self.hop_length, window=window, return_complex=True)
-        return tmp
-
-    def forward(self, seq):
-        # TODO obsismc: the batch size must be 1
-        seq = self.fc(seq)  # (B,L)
-        seq_fft_img = self.stft(seq)
-        seq_fft_real = torch.view_as_real(seq_fft_img)  # (B,N,T,C)
-        phase = None
-        if self.mag:
-            mag, phase = spec2magphase(seq_fft_real)
-            seq_fft_real = mag
-        seq_fft_real = seq_fft_real.permute(0, 3, 1, 2)  # (B,C,N,T)
-
-        # seq_wavs_down = [seq_fft_real]
-        # # Encoder part of the UNet
-        # for enc_layer_idx, enc_layer in enumerate(self.im_encoder_layers):
-        #     seq_wavs_down.append(enc_layer(seq_wavs_down[-1]))
-        #
-        # seq_wavs_up = [seq_wavs_down.pop()]
-        #
-        # # Decoder part of the UNet
-        # for dec_layer_idx, dec_layer in enumerate(self.im_decoder_layers):
-        #     seq_wavs_up.append(dec_layer(seq_wavs_up[-1], seq_wavs_down[-1 - dec_layer_idx], None))
-
-        seq_fft_ret = self.subnet(seq_fft_real)
-
-        return seq_fft_ret.permute(0, 2, 3, 1), phase  # (B,N,T,C), (B,N,T,1)
-
-
-class RevealNet(nn.Module):
-    def __init__(self, mp_decoder=None, stft_small=True, embed='stretch', luma=False, secrete_len=32,
-                 transform='fourier',
-                 num_points=64000,
-                 n_fft=1000,
-                 hop_length=400,
-                 mag=False):
-        super(RevealNet, self).__init__()
-
-        self.mp_decoder = mp_decoder
-        self._stft_small = stft_small
-        self.embed = embed
-        self.luma = luma
-
-        self.num_points = num_points
-        self.n_fft = n_fft
-        self.hop_length = hop_length
-        self.mag = mag
-
-        # self.im_encoder_layers = nn.ModuleList([
-        #     Down(1 + (not self.mag), 64),
-        #     Down(64, 64 * 2)
-        # ])
-        # self.im_decoder_layers = nn.ModuleList([
-        #     Up(64 * 2, 64),
-        #     Up(64, 1 + (not self.mag))
-        # ])
-        self.subnet = ResidualDenseBlock_out(2, 2)
-        self.fc = nn.Linear(self.num_points, secrete_len)
-
-    def istft(self, signal_wmd_fft):
-        window = torch.hann_window(self.n_fft).to(signal_wmd_fft.device)
-        return torch.istft(signal_wmd_fft, n_fft=self.n_fft, hop_length=self.hop_length, window=window,
-                           return_complex=False)
-
-    def forward(self, ct, phase=None):
-        ct = ct.permute(0, 3, 1, 2)  # (B,C,N,T)
-        # ct_down = [ct]
-        #
-        # # Encoder part of the UNet
-        # for enc_layer_idx, enc_layer in enumerate(self.im_encoder_layers):
-        #     ct_down.append(enc_layer(ct_down[-1]))
-        #
-        # ct_up = [ct_down.pop(-1)]
-        #
-        # # Decoder part of the UNet
-        # for dec_layer_idx, dec_layer in enumerate(self.im_decoder_layers):
-        #     ct_up.append(
-        #         dec_layer(ct_up[-1],
-        #                   ct_down[-1 - dec_layer_idx])
-        #     )
-        #
-        # revealed = ct_up[-1]
-
-        revealed = self.subnet(ct)
-
-        # obsismc: sequence
-        revealed = revealed.permute(0, 2, 3, 1).contiguous()  # (B,N,T,C)
-        if self.mag:
-            spec = magphase2spec(revealed, phase)
-            spec_img = torch.view_as_complex(spec.contiguous())
-        else:
-            spec_img = torch.view_as_complex(revealed)
-        revealed = self.istft(spec_img)
-        revealed = self.fc(revealed)
-        revealed = torch.sigmoid(revealed)
-
-        return revealed  # (B,secret_len)
-
-
 class Transform(torch.autograd.Function):
     @staticmethod
     def forward(ctx, wav, num_points, name, data_dict):
@@ -331,16 +147,6 @@ class StegoUNet(nn.Module):
             print("Loading Voice Cloning model...")
             preload_models()
             print("Finish loading!")
-        elif self.transform == "WM":
-            wm_len = 16
-            ckpt_path = f"1-multi_IDwl{wm_len}lr1e-4audioMSElam100/30-1-multi_IDwl16lr1e-4audioMSElam100.pt"
-            state_dict = torch.load(os.path.join(os.environ.get('OUT_PATH'), ckpt_path))["state_dict"]
-            self.wm_model = StegoUNet("ID", self.num_points, self.n_fft, self.hop_length, False, self.num_layers,
-                                      wm_len, 0)
-            self.wm_model.load_state_dict(state_dict)
-            self.transform_layer = lambda audio, data_dict: Transform.apply(audio, self.num_points, self.transform,
-                                                                            {"model": self.wm_model,
-                                                                             "watermark_len": self.watermark_len})
 
     def stft(self, data, return_complex=True):
         window = torch.hann_window(self.n_fft).to(data.device)
@@ -353,7 +159,7 @@ class StegoUNet(nn.Module):
         return torch.istft(signal_wmd_fft, n_fft=self.n_fft, hop_length=self.hop_length, window=window,
                            return_complex=False)
 
-    def forward(self, secret, cover, transcripts, text_prompts, shift_sound):
+    def forward(self, secret, cover, transcripts, text_prompts, shift_sound, **kwargs):
         # wavmark
 
         ## encode
@@ -381,7 +187,9 @@ class StegoUNet(nn.Module):
                                                              "text_prompt": text_prompt})
                 transform_ct_wavs.append(transform_ct_wav_tmp)
             transform_ct_wav = torch.cat(transform_ct_wavs, dim=0).to(watermark_ct_wav.device)
-
+        elif self.transform == "WM":
+            transform_ct_wav = self.transform_layer(watermark_ct_wav, {"model": kwargs["wm_model"],
+                                                                       "watermark_len": self.watermark_len})
         else:
             transform_ct_wav = self.transform_layer(watermark_ct_wav, None)
 
