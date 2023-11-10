@@ -81,7 +81,7 @@ def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, va
     # load watermark model as attacker
     wm_len = 16
     # ckpt_path = f"1-multi_IDwl{wm_len}lr1e-4audioMSElam100/30-1-multi_IDwl16lr1e-4audioMSElam100.pt"
-    ckpt_path = f"1-multi_WMwl{wm_len}lr1e-4audioMSElam100/18-1-multi_WMwl{wm_len}lr1e-4audioMSElam100.pt"
+    ckpt_path = f"1-multi_WMwl{wm_len}lr1e-4audioMSElam100/23-1-multi_WMwl{wm_len}lr1e-4audioMSElam100.pt"
     state_dict = torch.load(os.path.join(os.environ.get('OUT_PATH'), ckpt_path))["state_dict"]
     wm_model = StegoUNet("ID", model.num_points, model.n_fft, model.hop_length, False, model.num_layers,
                          wm_len, 0)
@@ -252,7 +252,7 @@ def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, va
                       f' Wm. BER ')
 
         # update attacker
-        if epoch > 10:
+        if epoch > 5:
             print(f"Updating watermarking model attacker")
             wm_model.load_state_dict(best_state_dict, strict=False)
 
