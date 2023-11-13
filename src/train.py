@@ -79,9 +79,10 @@ def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, va
                         :re.search("(?=Loss)", criterion_watermark.__class__.__name__).span()[0]]
 
     # load watermark model as attacker
-    wm_len = 16
-    # ckpt_path = f"1-multi_IDwl{wm_len}lr1e-4audioMSElam100/30-1-multi_IDwl16lr1e-4audioMSElam100.pt"
-    ckpt_path = f"1-multi_WMwl{wm_len}lr1e-4audioMSElam100/23-1-multi_WMwl{wm_len}lr1e-4audioMSElam100.pt"
+    # change initial attacker, updating freq
+    wm_len = 8
+    ckpt_path = f"1-multi_IDwl{wm_len}lr1e-4audioMSElam100/50-1-multi_IDwl{wm_len}lr1e-4audioMSElam100.pt"
+    # ckpt_path = f"1-multi_WMwl{wm_len}lr1e-4audioMSElam100/23-1-multi_WMwl{wm_len}lr1e-4audioMSElam100.pt"
     state_dict = torch.load(os.path.join(os.environ.get('OUT_PATH'), ckpt_path))["state_dict"]
     wm_model = StegoUNet("ID", model.num_points, model.n_fft, model.hop_length, False, model.num_layers,
                          wm_len, 0)
@@ -92,7 +93,7 @@ def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, va
     best_loss = np.inf
     best_snr = - np.inf
     ber_threshold = 1 / 32 / 2
-    best_state_dict = None
+    last_epoch_state = wm_model.state_dict()
 
     # Start training ...
     ini = time.time()
@@ -182,7 +183,8 @@ def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, va
                 'iter_tr_contrast_loss': train_contrast_loss[-1],
                 'iter_tr_watermark_loss': train_watermark_loss[-1],
                 'iter_tr_SNR': train_snr[-1],
-                'iter_tr_BER': train_ber[-1]
+                'iter_tr_BER': train_ber[-1],
+                'iter_tr_lr': optimizer.param_groups[0]['lr']
             })
 
             # Every 'val_itvl' iterations or at the end of epoch, do a validation step
@@ -191,7 +193,7 @@ def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, va
                     model, vd_loader, beta=beta, lmd=lam, alpha=alpha, gamma=gamma, val_size=val_size,
                     audio_criterion=criterion_audio, wm_criterion=criterion_watermark,
                     rst_audio_criterion=criterion_restore_audio, contrast_criterion=criterion_contrast,
-                    tr_i=i, epoch=epoch,wm_model=wm_model)
+                    tr_i=i, epoch=epoch, wm_model=wm_model)
 
                 vd_loss.append(valid_loss)
                 vd_audio_loss.append(valid_audio_loss)
@@ -209,8 +211,6 @@ def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, va
                 print(f"Current best -> best loss:{best_loss}, best snr: {best_snr}")
                 best_loss = min(best_loss, valid_loss)
                 best_snr = max(best_snr, valid_snr)
-                if is_best:
-                    best_state_dict = model.state_dict()
 
                 # Save checkpoint if is a new best
                 save_checkpoint({
@@ -252,9 +252,35 @@ def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, va
                       f' Wm. BER ')
 
         # update attacker
-        if epoch > 5:
+        last_epoch_state = model.state_dict()
+        if (epoch + 1) > 4 and (epoch + 1) % 5 == 0:
             print(f"Updating watermarking model attacker")
-            wm_model.load_state_dict(best_state_dict, strict=False)
+            wm_model.load_state_dict(last_epoch_state, strict=False)
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'state_dict': last_epoch_state,
+                'best_loss': best_loss,
+                'beta': beta,
+                'lr': lr,
+                'i': -1,
+                'tr_loss': train_loss,
+                'tr_audio_loss': train_audio_loss,
+                'tr_restore_audio_loss': train_restore_audio_loss,
+                'tr_contrast_loss': train_contrast_loss,
+                'tr_watermark_loss': train_watermark_loss,
+                'tr_snr': train_snr,
+                'tr_ber': train_ber,
+                'vd_loss': vd_loss,
+                'vd_audio_loss': vd_audio_loss,
+                'vd_restore_audio_loss': vd_restore_audio_loss,
+                'vd_contrast_loss': vd_contrast_loss,
+                'vd_watermark_loss': vd_watermark_loss,
+                'vd_snr': vd_snr,
+                'vd_ber': vd_ber,
+                'audio_loss_name': criterion_audio_name,
+                'wm_loss_name': criterion_wm_name
+            }, is_best=True, filename=os.path.join(os.environ.get('OUT_PATH'),
+                                                   f'{experiment}-{summary}/{epoch + 1}-{experiment}-self-{summary}.pt'))
 
         # Print average training results after every epoch
         train_loss_avg = np.mean(train_loss)
