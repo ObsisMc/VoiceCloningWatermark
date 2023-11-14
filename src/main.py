@@ -208,6 +208,10 @@ parser.add_argument("--shift_ratio",
                     type=float,
                     default=0.1
                     )
+parser.add_argument("--share_param",
+                    type=parse_keyword,
+                    default=False,
+                    metavar='BOOL')
 
 if __name__ == '__main__':
     set_reproductibility()
@@ -236,6 +240,7 @@ if __name__ == '__main__':
         shift_ratio=args.shift_ratio
     )
 
+    print(f"share param: {args.share_param}")
     model = StegoUNet(
         transform=args.transform,
         num_points=args.num_points,
@@ -244,7 +249,8 @@ if __name__ == '__main__':
         mag=args.mag,
         num_layers=args.num_layers,
         watermark_len=args.watermark_len,
-        shift_ratio=args.shift_ratio
+        shift_ratio=args.shift_ratio,
+        share_param=args.share_param
     )
     # if args.transform == "WM":
     #     wm_len = 16
@@ -258,7 +264,11 @@ if __name__ == '__main__':
         checkpoint = torch.load(os.path.join(os.environ.get('OUT_PATH'), args.from_checkpoint), map_location='cpu')
         # if torch.cuda.device_count() > 1:
         #     model = nn.DataParallel(model)
-        model.load_state_dict(checkpoint["state_dict"], strict=False)
+        if args.share_param:
+            state_dict = {k:v for k, v in checkpoint["state_dict"].items() if "hinet_r" not in k}
+        else:
+            state_dict = checkpoint["state_dict"]
+        model.load_state_dict(state_dict, strict=False)
         print('Checkpoint loaded')
 
     print('Ready to train!')

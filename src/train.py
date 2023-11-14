@@ -80,20 +80,25 @@ def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, va
 
     # load watermark model as attacker
     # change initial attacker, updating freq
-    wm_len = 8
-    ckpt_path = f"1-multi_IDwl{wm_len}lr1e-4audioMSElam100/50-1-multi_IDwl{wm_len}lr1e-4audioMSElam100.pt"
-    # ckpt_path = f"1-multi_WMwl{wm_len}lr1e-4audioMSElam100/23-1-multi_WMwl{wm_len}lr1e-4audioMSElam100.pt"
-    state_dict = torch.load(os.path.join(os.environ.get('OUT_PATH'), ckpt_path))["state_dict"]
-    wm_model = StegoUNet("ID", model.num_points, model.n_fft, model.hop_length, False, model.num_layers,
-                         wm_len, 0)
-    wm_model.load_state_dict(state_dict, strict=False)
-    wm_model.to(device)
+    wm_model = None
+    if model.transform == "WM":
+        wm_len = 8
+        ckpt_path = f"1-multi_IDwl{wm_len}lr1e-4audioMSElam100/50-1-multi_IDwl{wm_len}lr1e-4audioMSElam100.pt"
+        # ckpt_path = f"1-multi_WMwl{wm_len}lr1e-4audioMSElam100/23-1-multi_WMwl{wm_len}lr1e-4audioMSElam100.pt"
+        state_dict = torch.load(os.path.join(os.environ.get('OUT_PATH'), ckpt_path))["state_dict"]
+        if model.share_param:
+            state_dict = {k:v for k, v in state_dict.items() if "hinet_r" not in k}
+        wm_model = StegoUNet("ID", model.num_points, model.n_fft, model.hop_length, False, model.num_layers,
+                             wm_len, 0, model.share_param)
+        wm_model.load_state_dict(state_dict, strict=False)
+        wm_model.to(device)
+
+        last_epoch_state = wm_model.state_dict()
 
     # Initialize best val
     best_loss = np.inf
     best_snr = - np.inf
     ber_threshold = 1 / 32 / 2
-    last_epoch_state = wm_model.state_dict()
 
     # Start training ...
     ini = time.time()
@@ -251,36 +256,37 @@ def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, va
                       f' Au. SNR '
                       f' Wm. BER ')
 
-        # update attacker
-        last_epoch_state = model.state_dict()
-        if (epoch + 1) > 4 and (epoch + 1) % 5 == 0:
-            print(f"Updating watermarking model attacker")
-            wm_model.load_state_dict(last_epoch_state, strict=False)
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'state_dict': last_epoch_state,
-                'best_loss': best_loss,
-                'beta': beta,
-                'lr': lr,
-                'i': -1,
-                'tr_loss': train_loss,
-                'tr_audio_loss': train_audio_loss,
-                'tr_restore_audio_loss': train_restore_audio_loss,
-                'tr_contrast_loss': train_contrast_loss,
-                'tr_watermark_loss': train_watermark_loss,
-                'tr_snr': train_snr,
-                'tr_ber': train_ber,
-                'vd_loss': vd_loss,
-                'vd_audio_loss': vd_audio_loss,
-                'vd_restore_audio_loss': vd_restore_audio_loss,
-                'vd_contrast_loss': vd_contrast_loss,
-                'vd_watermark_loss': vd_watermark_loss,
-                'vd_snr': vd_snr,
-                'vd_ber': vd_ber,
-                'audio_loss_name': criterion_audio_name,
-                'wm_loss_name': criterion_wm_name
-            }, is_best=True, filename=os.path.join(os.environ.get('OUT_PATH'),
-                                                   f'{experiment}-{summary}/{epoch + 1}-{experiment}-self-{summary}.pt'))
+        if model.transform == "WM":
+            # update attacker
+            last_epoch_state = model.state_dict()
+            if (epoch + 1) > 26 and (epoch + 1) % 2 == 1 or 27 > (epoch + 1) > 4 and (epoch + 1) % 5 == 0:
+                print(f"Updating watermarking model attacker")
+                wm_model.load_state_dict(last_epoch_state, strict=False)
+                save_checkpoint({
+                    'epoch': epoch + 1,
+                    'state_dict': last_epoch_state,
+                    'best_loss': best_loss,
+                    'beta': beta,
+                    'lr': lr,
+                    'i': -1,
+                    'tr_loss': train_loss,
+                    'tr_audio_loss': train_audio_loss,
+                    'tr_restore_audio_loss': train_restore_audio_loss,
+                    'tr_contrast_loss': train_contrast_loss,
+                    'tr_watermark_loss': train_watermark_loss,
+                    'tr_snr': train_snr,
+                    'tr_ber': train_ber,
+                    'vd_loss': vd_loss,
+                    'vd_audio_loss': vd_audio_loss,
+                    'vd_restore_audio_loss': vd_restore_audio_loss,
+                    'vd_contrast_loss': vd_contrast_loss,
+                    'vd_watermark_loss': vd_watermark_loss,
+                    'vd_snr': vd_snr,
+                    'vd_ber': vd_ber,
+                    'audio_loss_name': criterion_audio_name,
+                    'wm_loss_name': criterion_wm_name
+                }, is_best=True, filename=os.path.join(os.environ.get('OUT_PATH'),
+                                                       f'{experiment}-{summary}/{epoch + 1}-{experiment}-self-{summary}.pt'))
 
         # Print average training results after every epoch
         train_loss_avg = np.mean(train_loss)

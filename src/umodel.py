@@ -115,7 +115,7 @@ class Transform(torch.autograd.Function):
 
 class StegoUNet(nn.Module):
     def __init__(self, transform, num_points, n_fft, hop_length,
-                 mag, num_layers, watermark_len, shift_ratio, **kwargs):
+                 mag, num_layers, watermark_len, shift_ratio, share_param):
         assert mag == False and num_layers > 0
 
         super().__init__()
@@ -130,11 +130,15 @@ class StegoUNet(nn.Module):
         self.watermark_len = watermark_len
         self.shift_ratio = shift_ratio
         self.shift_max_len = int(self.num_points * self.shift_ratio)
+        self.share_param = share_param
 
         # wavmark
         self.watermark_fc = nn.Linear(self.watermark_len, self.num_points)
         self.hinet = Hinet(num_layers=self.num_layers)
-        self.hinet_r = Hinet(num_layers=self.num_layers)
+        if self.share_param:
+            self.hinet_r = self.hinet
+        else:
+            self.hinet_r = Hinet(num_layers=self.num_layers)
         self.watermark_fc_back = nn.Linear(self.num_points, self.watermark_len)
 
         # alignment
