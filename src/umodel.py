@@ -192,8 +192,9 @@ class StegoUNet(nn.Module):
                 transform_ct_wavs.append(transform_ct_wav_tmp)
             transform_ct_wav = torch.cat(transform_ct_wavs, dim=0).to(watermark_ct_wav.device)
         elif self.transform == "WM":
-            transform_ct_wav = self.transform_layer(watermark_ct_wav, {"model": kwargs["wm_model"],
-                                                                       "watermark_len": self.watermark_len})
+            # transform_ct_wav = self.transform_layer(watermark_ct_wav, {"model": kwargs["wm_model"],
+            #                                                            "watermark_len": self.watermark_len})
+            transform_ct_wav = self.self_attack(watermark_ct_wav)
         else:
             transform_ct_wav = self.transform_layer(watermark_ct_wav, None)
 
@@ -280,6 +281,16 @@ class StegoUNet(nn.Module):
         audio_restored = self.istft(audio_restored_fft)
 
         return revealed, audio_restored
+
+    def self_attack(self, audio):
+        device = audio.device
+
+        wm = torch.rand(self.watermark_len).repeat(audio.size(0), 1).to(device)
+        wav_encode = self.encode(wm, audio)
+        _, wav_decode = self.decode(wav_encode)
+
+        return wav_decode
+
 
 
 class AlignmentLayer(nn.Module):
