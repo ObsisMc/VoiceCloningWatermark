@@ -59,11 +59,6 @@ Replace variables in `.env` to set up your default path.
 
 Run `run_train_multiwm.sh` to train.
 
-## Watermarking of Voice Cloning
-
-- whisper needs ffmpeg to read audio files, if you don't have it and cannot install it,
-you can replace the original code with `torchaudio.load()`
-
 ## Thanks
 - [Wavmark](https://github.com/wavmark/wavmark): Model's architecture is based on Wavmark.
 - [Pixinwav](https://github.com/migamic/PixInWav2): Training code refers to Pixinwav.
