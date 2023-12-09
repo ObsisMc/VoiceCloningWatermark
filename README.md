@@ -47,17 +47,21 @@ Important directory
 - 
 ## Installation
 Refer to [Pixinwav](https://github.com/migamic/PixInWav2) and [Wavmark](https://github.com/wavmark/wavmark).
+You can also use `envirnoment.yaml` to install dependencies.
 
 This project runs in Python 3.10. We use `wandb` to log the training progress. 
 
 ## Usage
 ### Dataset
-This work uses Librispeech. We use [HuggingFace's API](https://huggingface.co/datasets/hf-internal-testing/librispeech_asr_demo) to get it.
+We used `src/preprocessor.py` to process LibriSpeech and built a customized dataset. 
+Though this experiment don't need texts like voice cloning models, you still need to build such a 
+dataset.
+
 
 ### Training
 Replace variables in `.env` to set up your default path.
 
-Run `run_train_multiwm.sh` to train.
+Run `scripts/run_train_multiwm.sh` to train.
 
 ## Thanks
 - [Wavmark](https://github.com/wavmark/wavmark): Model's architecture is based on Wavmark.
