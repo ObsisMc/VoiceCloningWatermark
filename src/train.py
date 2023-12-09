@@ -87,7 +87,7 @@ def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, va
         # ckpt_path = f"1-multi_WMwl{wm_len}lr1e-4audioMSElam100/23-1-multi_WMwl{wm_len}lr1e-4audioMSElam100.pt"
         state_dict = torch.load(os.path.join(os.environ.get('OUT_PATH'), ckpt_path))["state_dict"]
         if model.share_param:
-            state_dict = {k:v for k, v in state_dict.items() if "hinet_r" not in k}
+            state_dict = {k: v for k, v in state_dict.items() if "hinet_r" not in k}
         wm_model = StegoUNet("ID", model.num_points, model.n_fft, model.hop_length, False, model.num_layers,
                              wm_len, 0, model.share_param)
         wm_model.load_state_dict(state_dict, strict=False)
@@ -138,20 +138,20 @@ def train(model, tr_loader, vd_loader, beta, lam, alpha, gamma, lr, epochs=5, va
 
             # Forward through the model
             # (B,N,T,C), (B,N,T,C), (B,L), (B,secret_len)
-            cover_fft, containers_fft, container_wav, revealed, audio_revealed = model(secrets,
-                                                                                       covers,
-                                                                                       transcripts,
-                                                                                       text_prompts,
-                                                                                       shift_sound=shift_sound,
-                                                                                       wm_model=wm_model)
+            cover_fft, containers_fft, container_wav, revealed, audio_revealed, cover_attack = model(secrets,
+                                                                                                     covers,
+                                                                                                     transcripts,
+                                                                                                     text_prompts,
+                                                                                                     shift_sound=shift_sound,
+                                                                                                     wm_model=wm_model)
 
             # loss
             # loss, loss_cover, loss_secret, loss_spectrum = StegoLoss(secrets, cover_fft, containers_fft, None,
             #                                                          revealed, beta)
             loss_watermark = criterion_watermark(revealed, secrets)
             loss_audio = criterion_audio(covers, container_wav)
-            loss_restore_audio = criterion_restore_audio(covers, audio_revealed)
-            loss_contrast = criterion_contrast(audio_revealed, covers, container_wav)
+            loss_restore_audio = criterion_restore_audio(cover_attack, audio_revealed)
+            loss_contrast = criterion_contrast(audio_revealed, covers, container_wav)  # useless
             loss_total = beta * loss_watermark + lam * loss_audio + alpha * loss_restore_audio + gamma * loss_contrast
 
             with torch.autograd.set_detect_anomaly(True):
@@ -366,12 +366,13 @@ def validate(model, vd_loader, beta, lmd, alpha, gamma, val_size,
 
             # Forward through the model
             # (B,N,T,2), (B,N,T,2), (B,L), (B,secret_len)
-            cover_fft, containers_fft, container_wav, revealed, audio_revealed = model(secrets,
-                                                                                       covers,
-                                                                                       transcripts,
-                                                                                       text_prompts,
-                                                                                       shift_sound=shift_sound,
-                                                                                       wm_model=kwargs["wm_model"])
+            cover_fft, containers_fft, container_wav, revealed, audio_revealed, cover_attack = model(secrets,
+                                                                                                     covers,
+                                                                                                     transcripts,
+                                                                                                     text_prompts,
+                                                                                                     shift_sound=shift_sound,
+                                                                                                     wm_model=kwargs[
+                                                                                                         "wm_model"])
 
             # Visualize results
             if i == 0:
@@ -381,8 +382,8 @@ def validate(model, vd_loader, beta, lmd, alpha, gamma, val_size,
             # Compute the loss
             loss_watermark = wm_criterion(revealed, secrets)
             loss_audio = audio_criterion(covers, container_wav)
-            loss_rst_audio = rst_audio_criterion(covers, audio_revealed)
-            loss_contrast = contrast_criterion(audio_revealed, covers, container_wav)
+            loss_rst_audio = rst_audio_criterion(cover_attack, audio_revealed)
+            loss_contrast = contrast_criterion(audio_revealed, covers, container_wav)  # useless
             loss_total = beta * loss_watermark + lmd * loss_audio + alpha * loss_rst_audio + gamma * loss_contrast
 
             # Compute audio metrics

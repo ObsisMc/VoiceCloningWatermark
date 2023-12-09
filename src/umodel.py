@@ -166,6 +166,10 @@ class StegoUNet(nn.Module):
     def forward(self, secret, cover, transcripts, text_prompts, shift_sound, **kwargs):
         # wavmark
 
+        # pre attack
+        if self.transform == "WM":
+            cover = self.self_attack(cover)
+
         ## encode
         cover_fft = self.stft(cover)
         cover_fft_real = torch.view_as_real(cover_fft)
@@ -237,7 +241,7 @@ class StegoUNet(nn.Module):
         # useless
         return_ct_fft = cover_fft_real
 
-        return cover_fft_real, return_ct_fft, watermark_ct_wav, revealed, audio_restored
+        return cover_fft_real, return_ct_fft, watermark_ct_wav, revealed, audio_restored, cover
 
     def enc_dec(self, signal, watermark, rev):
         signal = signal.permute(0, 3, 2, 1)
